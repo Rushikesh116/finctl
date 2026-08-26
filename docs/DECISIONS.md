@@ -523,3 +523,90 @@ The verifier therefore trusts no proposer, including the ones that cannot lie. I
 identity from the records and ignores whatever the proposing layer calculated, so a layer that
 miscalculates its own δ cannot get a group approved on the strength of its own mistake — which
 is a test, not a hypothetical. *2026-08-26*
+
+---
+
+## D-0023 — the ambiguity margin is pre-registered at exact ties, before any Layer 3 run
+
+**Written before Layer 3 exists and before any Phase 4 number has been seen.** The margin moves
+both the match rate and the false-match rate, so a value chosen after looking at what it does to
+dev is a hyperparameter fitted to the test set, whatever it is called.
+
+**Decision. The margin is zero: refuse only on an exact tie.** A candidate pair is matched if
+*anything* in the data discriminates it from the runner-up, and refused if *nothing* does.
+
+**Why this value, argued without reference to any result:**
+
+1. **It is the only value that requires no tuning.** Every positive margin is a point on a
+   continuum with no principled stopping place; zero is the degenerate case, reachable by
+   reasoning alone. A number nobody had to choose cannot have been fitted.
+2. **Its semantics are exact, not statistical.** "Nothing in the evidence separates these two"
+   is a checkable property. "The gap is under 0.05 of the score range" is a statement about a
+   scoring function's arbitrary units.
+3. **The scoring inputs are discrete, so near-ties are largely an artefact a margin would
+   invent.** Amount tolerance is zero (D-0024), so amounts either agree exactly or are not
+   candidates at all; what remains is date proximity in whole days and the presence or absence
+   of a key. Continuous near-misses are not a natural feature of this space.
+4. **Pathology 7 is constructed as an exact identity** — same amount, same day, no
+   distinguishing key — so an exact-tie rule is precisely what the pathology is designed to
+   trigger. It needs no slack to be caught.
+
+**Pre-registered commitments, binding regardless of what the numbers turn out to be:**
+
+- If the margin is ever changed, **both settings' full metrics blocks are published side by
+  side** in `docs/METRICS.md`, not just the one that was kept.
+- A sensitivity sweep over margins may be reported as a **diagnostic**, explicitly labelled as
+  not used for selection. If the sweep shows zero performs badly, that is a **finding to
+  report**, not a licence to change the value quietly.
+- The holdout is never used to choose it. It is evaluated once, in Phase 6.
+
+**Alternative rejected.** *Pick a small positive margin such as 0.05 and justify it as "5% of
+the score range".* The percentage sounds principled and is not: it inherits whatever scale the
+cost function happens to use, so the same 0.05 means different things after any re-weighting —
+and it would need re-tuning every time the scoring changed, against the only data available.
+*2026-08-26*
+
+---
+
+## D-0024 — the verifier's Layer 3 contract is exact amount equality, still zero tolerance
+
+**Context.** Layers 1 and 2 are verified against a *closed system*: the batch's expected credit
+must equal an observed bank credit, exactly. Layer 3 pairs merchant-ledger rows to gateway
+payments, and there is no bank credit in that relation — so the obvious implementation approves
+candidates on **cost**, which is not arithmetic at all. That is where false matches would enter.
+
+**Decision. The verifier applies zero tolerance to Layer 3 as well, on a different identity:**
+
+```
+merchant.amount_paise == gateway.credit_paise      exactly
+merchant.currency     == gateway.currency
+merchant.issued_at_utc <= gateway.created_at_utc   (an order precedes its payment)
+```
+
+A proposal failing any of these is `VERIFIER_REJECTED` **regardless of how good its cost was**.
+Cost decides *which* candidate is proposed; it never decides whether a proposal is accepted.
+
+**The consequence that matters: `FINCTL_AMOUNT_TOLERANCE_PAISE` stays 0.** Fuzziness lives in
+the date window and in key presence — never in the money. Two records whose amounts differ by
+one paisa are not near-candidates, they are not candidates.
+
+**Being precise about what is still weaker here, because it is:**
+
+Layers 1–2 verify that a *set* of records accounts for an *observed external scalar*. Two
+records cannot satisfy that by coincidence unless their arithmetic genuinely sums. Layer 3
+verifies a *pairwise equality*, and two records can satisfy that while not being the true pair —
+same amount, same day, different customer. So the residual risk at Layer 3 is not arithmetic
+error, it is **attribution error**: right amount, wrong counterparty.
+
+That risk is real and it is not eliminated by this contract. What the contract does is confine
+it: Layer 3 cannot produce a group whose money does not add up, only one whose money adds up and
+whose counterparty is wrong. **The before/after false-match rate on identical data is the
+instrument for that**, which is why the ablation reports it on every arm and why Phase 4's gate
+requires it before and after.
+
+**Alternative rejected.** *Allow a small amount tolerance so near-misses become candidates.* It
+would raise the match rate and move the risk from attribution into arithmetic — a group could
+then be approved whose money does not balance, which is the one thing Layers 1 and 2 make
+impossible. If a tolerance is ever introduced, the false-match rate must be re-reported on both
+settings and the verifier's guarantee restated, because it would no longer be "the money
+balances". *2026-08-26*

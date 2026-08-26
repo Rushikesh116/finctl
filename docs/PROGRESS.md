@@ -213,7 +213,36 @@ The hardest algorithmic piece.
 
 ---
 
-## Phase 4 — fuzzy matching and global assignment · TODO
+## Phase 4 — fuzzy matching and global assignment · IN PROGRESS
+
+**Pre-registered before any Layer 3 run, so neither can be fitted to dev:**
+
+- **Ambiguity margin = 0 (exact ties only)** — D-0023. Changing it later requires publishing
+  *both* settings' full metrics blocks, not just the kept one.
+- **Verifier contract for Layer 3 = exact amount equality, zero tolerance** — D-0024. Cost
+  decides which candidate is *proposed*; arithmetic decides whether it is *accepted*.
+  `FINCTL_AMOUNT_TOLERANCE_PAISE` stays 0, so Layer 3 cannot produce a group whose money does
+  not balance — only one whose money balances and whose counterparty is wrong. That residual
+  attribution risk is what the before/after false-match rate measures.
+
+**Two defects found before starting, both blocking a meaningful Phase 4 gate:**
+
+- [ ] **Pathology 7 does not present the choice it claims to test.** The twins
+      (`ml_000181`–`184` on dev) have **zero** same-amount gateway payments, so they are
+      *unmatched*, not *ambiguous* — the honest exception today would be `MISSING_GATEWAY_ROW`.
+      The gate "pathology 7 produces an `AMBIGUOUS` exception" cannot be met by a correct engine
+      against this data. The generator must give the twins gateway counterparts so a genuine
+      2x2 identical block exists.
+- [ ] **M5 batch members are mislabelled pathology 7.** Phase 1's `MECHANISM_PATHOLOGY` mapped
+      `multiple_subsets_explain_delta` to 7 on the grounds of "same principle" (`SPEC.md` §4.1
+      says exactly that). But SPEC §5 pathology 7 is the record-level no-distinguishing-key
+      case, so `P7 46/46` is dominated by 14 perfectly matchable M5 batch rows and reports on
+      the wrong population. M5 batches should carry pathology 1; ambiguity is a *mechanism*
+      property, not a pathology.
+
+**Also needs moving:** Layer 2 currently emits the `TIMING_OUTSIDE_WINDOW` sweep for unclaimed
+pool rows. That is a **terminal** classification and must run after every layer has had a
+chance, or Layer 2 will claim rows Layer 3 needed as candidates.
 
 - [ ] Candidate generation with amount tolerance and date windows
 - [ ] Cost matrix solved with `scipy.optimize.linear_sum_assignment` — **not greedy** (D-0002)
