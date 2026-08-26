@@ -59,7 +59,9 @@ commit.
 
 The most important phase: if the generator is wrong, every metric downstream is a lie.
 
-- [ ] `core/money.py` — integer paise type, parsing, formatting, `split_with_remainder`
+- [x] `core/money.py` — integer minor units, parsing, Indian-grouped formatting,
+      `pct_half_up`, `split_with_remainder`, integer FX conversion. **All guards `raise`,
+      verified to survive `python -O`.** 64 tests pass, 0 skipped
 - [ ] `core/records.py` — canonical schemas per `SPEC.md` §3 (`core` owns them; `data` and
       `eval` import *from* `core`)
 - [ ] `data/scenarios.toml` — twelve pathologies with mix weights, stdlib `tomllib` (D-0010)
@@ -72,8 +74,8 @@ The most important phase: if the generator is wrong, every metric downstream is 
 - [ ] A test asserts every pathology appears **at least twice** in **each** dataset
 - [ ] Both forms of the netting identity (`SPEC.md` §4) agree on every generated batch
 - [ ] `split_with_remainder` has a **property test**: `sum(parts) == total` over random inputs
-- [ ] `test_no_float_in_money_signatures` and `test_money_module_never_calls_float` **no
-      longer skip**
+- [x] `test_no_float_in_money_signatures`, `test_money_module_never_calls_float` and
+      `test_money_module_uses_exceptions_not_asserts` **no longer skip**
 - [ ] `docs/SPEC.md` frozen
 
 ---

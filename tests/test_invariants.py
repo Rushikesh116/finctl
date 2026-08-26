@@ -112,6 +112,28 @@ def test_money_module_never_calls_float() -> None:
     )
 
 
+def test_money_module_uses_exceptions_not_asserts() -> None:
+    """A money guard must not be strippable.
+
+    `python -O` removes every assert statement, so an `assert` guard silently vanishes under
+    an optimisation flag — leaving the code path that was supposed to be impossible wide
+    open, in production, raising nothing. Money guards `raise`.
+    """
+    if not MONEY_MODULE.exists():
+        pytest.skip("core/money.py lands in Phase 1 — see docs/PROGRESS.md")
+
+    offenders = [
+        f"core/money.py:{node.lineno}"
+        for node in ast.walk(_parse(MONEY_MODULE))
+        if isinstance(node, ast.Assert)
+    ]
+
+    assert not offenders, (
+        "core/money.py uses `assert` as a guard. `python -O` strips asserts; raise a "
+        "ValueError instead so the guard survives.\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_core_never_imports_ground_truth() -> None:
     """Invariant 2: ground-truth leakage is the likeliest way to fake a good result.
 

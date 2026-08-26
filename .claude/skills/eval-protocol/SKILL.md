@@ -53,16 +53,24 @@ Fixed once, so the same word never means two things:
 
 - **record** — one row in one of the three sources, identified by `(source, row_id)`.
   `N = records processed` is the total across all three sources in the dataset.
-- **match group** — a set of records the engine asserts describe the same money
-  movement, **approved by the verifier**. An LLM proposal is not a match group until
-  `core/verifier.py` re-checks its arithmetic independently.
+- **match group** — a set of records the engine asserts form **one reconcilable unit**,
+  **approved by the verifier**. For settled rows that unit is the settlement batch and the
+  bank line it produced, so a group can hold a hundred-plus records. It is *not* a pairwise
+  partner relation. An LLM proposal is not a match group until `core/verifier.py` re-checks
+  its arithmetic independently.
 - **auto-matched** — a record belonging to an approved match group.
 - **exception** — a record in no approved group. Every record is in exactly one of the
   two states.
 
-**Partition invariant:** `auto_matched + exception_records == N`, exactly, asserted in the
-harness. A metrics block where these do not sum is reporting on a subset it did not tell
-you about.
+Ground-truth group semantics are frozen in `docs/SPEC.md` §3.8. The two consequences that
+matter for scoring: a refund's true group is **the settlement batch that deducted it, not its
+parent payment** (the payment link is a record field, so it is discoverable rather than
+labelled), and a record whose counterpart is **absent** from the data has no group at all —
+it is `unmatchable` with a reason code, so flagging it scores as correct.
+
+**Partition invariant:** `auto_matched + exception_records == N`, exactly. The harness
+**raises** on violation — not `assert`, because `python -O` strips asserts and a silently
+disabled partition check is exactly how a rate gets computed over an undisclosed subset.
 
 ## 4. Metric definitions and denominators
 
@@ -73,7 +81,7 @@ you about.
 | **False-match rate** | records in an approved group that disagrees with ground truth | **auto-matched** |
 | Exception rate | exception records | `N` |
 | Correctly flagged | exceptions that ground truth says are genuinely unmatchable | exceptions |
-| Coverage / recall | auto-matched records whose group matches truth | records whose truth has a partner |
+| Coverage / recall | auto-matched records whose group matches truth | records with a true group (i.e. `unmatchable == False`) |
 | Throughput | `N` | wall-clock seconds |
 | LLM calls / 100 | LLM calls × 100 | `N` |
 | Cost / 1000 | run cost × 1000 | `N` |
@@ -83,10 +91,26 @@ you about.
 is honest. A system can trivially reach 99% coverage by matching everything; the
 false-match rate is what makes that visible.
 
-A **false match** is either of: a record grouped with a record that is not its true
-partner, or a record matched at all when ground truth labels it unmatchable. Both are
-counted; they are not distinguished in the headline number, and both are itemised in the
-exception detail.
+**The comparison rule, stated exactly.** For a record `r` in an approved group, let
+`engine_group(r)` be the set of records the engine grouped it with and `true_group(r)` the
+set sharing its `true_group_id`. Then `r` is **correctly matched** iff
+`engine_group(r) == true_group(r)` **as sets**, and a **false match** otherwise. A record the
+engine matched at all when ground truth says `unmatchable` is also a false match (its true
+group is empty, so set equality fails — the rule already covers it).
+
+Set equality is strict on purpose: one wrongly included row makes every record in that batch
+a false match. That is the right severity here, and it is not as harsh as it looks:
+
+- A bank credit either balances against its constituent set or it does not. "I reconciled
+  100 of the 101 records in this credit" is not a meaningful claim — the credit is either
+  explained or unexplained.
+- Because the verifier re-checks arithmetic at **zero tolerance**, a group with a wrong
+  member *cannot balance*, so it cannot be approved in the first place. The only way a wrong
+  set reaches the ledger is if the arithmetic coincidentally still sums — two rows with the
+  same total — which is a genuine false match of the whole batch, not a near miss.
+
+So the strict rule and the verifier boundary agree, and the metric measures what the verifier
+actually lets through.
 
 An exception that ground truth says *was* matchable is a **missed match** (false
 negative), not a correctly-flagged one. So `exceptions = correctly_flagged + missed_matches`.
@@ -134,11 +158,11 @@ SPEC freeze.
 | `MISSING_BANK_ROW` | gateway says settled, no bank credit exists | 8 |
 | `MISSING_GATEWAY_ROW` | bank credit with no gateway batch | 8 |
 | `DUPLICATE_REFERENCE` | reference reused across days, cannot disambiguate | 2 |
-| `UNEXPLAINED_ADJ` | adjustment with no resolvable order or payment reference | 11 |
+| `UNEXPLAINED_ADJ` | `adjustment` row with `dispute_id`, `order_id` and `payment_id` all null | 11 |
 | `SUBSET_SEARCH_EXHAUSTED` | bounded search hit its node budget or timeout | 1, 3 |
 | `TIMING_OUTSIDE_WINDOW` | plausible partner exists but falls outside the date window | 9 |
 | `FX_UNRESOLVED` | multi-currency line whose INR conversion cannot be reproduced | 12 |
-| `DISPUTE_UNRESOLVED` | chargeback or representment leg not yet closed | 5 |
+| `DISPUTE_UNRESOLVED` | `adjustment` row **with** `dispute_id`, whose opposite leg is not found | 5 |
 | `ON_HOLD_UNRELEASED` | held balance with no observed release | 10 |
 | `VERIFIER_REJECTED` | a proposal failed independent arithmetic re-check | — |
 | `UNPARSEABLE_NARRATION` | bank narration no regex or LLM could parse | — |

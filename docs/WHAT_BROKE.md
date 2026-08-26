@@ -40,5 +40,17 @@ here:
 - The `fee` / GST double-count ambiguity → `DECISIONS.md` D-0003, `OPEN_QUESTIONS.md` Q-002
 - `temperature=0` returning HTTP 400 on the default model → D-0004, Q-003
 
-Neither is a failure log entry, because neither has produced a wrong number yet. If one
-does, it gets an entry with the metric on both sides.
+Two more caught at the Phase 1 spec review, before any code was written against them:
+
+- **A `pct_half_up` guard written as `assert` would have been strippable.** `python -O`
+  removes asserts, and the demonstration is unambiguous: the assert version of the function
+  returns `0` for an input of `-1` under `-O` — a silently wrong money value with no error
+  raised. Now a `ValueError`, verified to still raise under `-O`, and structurally enforced
+  by `tests/test_invariants.py::test_money_module_uses_exceptions_not_asserts`.
+- **Half-up rounding does not distribute over addition**, so a batch-level GST check would
+  have disagreed with the summed per-row GST by a paisa and looked like a data problem.
+  `Σ gst_on_fee` is now defined as a sum of stored values (`SPEC.md` §4), with the exact
+  25p+25p → 10 vs 9 case locked by `tests/test_money.py::test_gst_is_summed_not_recomputed`.
+
+None of the four is a failure log entry, because none has produced a wrong number in a run.
+If one does, it gets an entry with the metric on both sides.

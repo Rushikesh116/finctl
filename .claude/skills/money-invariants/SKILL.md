@@ -36,10 +36,26 @@ Only two rounding situations exist in this project, and both are integer-only.
 
 ```python
 def pct_half_up(base_paise: int, numerator: int, denominator: int) -> int:
-    """base * numerator / denominator, rounded half-up. Requires base_paise >= 0."""
-    assert base_paise >= 0, "apply sign at the call site, not inside rounding"
+    """base * numerator / denominator, rounded half-up. Sign is the caller's job."""
+    if base_paise < 0:
+        raise ValueError(
+            f"pct_half_up needs a non-negative base, got {base_paise}; apply the sign at "
+            "the call site so floor division cannot skew"
+        )
+    if denominator <= 0:
+        raise ValueError(f"pct_half_up needs a positive denominator, got {denominator}")
     return (base_paise * numerator + denominator // 2) // denominator
 ```
+
+**A guard on money arithmetic is never an `assert`.** `python -O` strips assert statements,
+so an `assert` guard silently disappears under an optimisation flag — leaving the one code
+path that was supposed to be impossible wide open, in production, with no error. Money
+guards `raise`. This is structurally enforced:
+`tests/test_invariants.py::test_money_module_uses_exceptions_not_asserts` fails on any
+`assert` in `core/money.py`.
+
+(Bare `assert` in a *test* is fine and idiomatic — pytest rewrites them and test runs are
+never under `-O`. The rule is about production guards.)
 
 Half-up, not banker's rounding: it is the convention a finance reviewer expects on Indian
 tax arithmetic, and a reviewer who has to ask which rounding you used has already lost
@@ -91,6 +107,33 @@ with a test, and never inline it.
 `UNVERIFIED` — which reading matches production is Q-002 in `docs/OPEN_QUESTIONS.md`.
 The canonical schema above is correct under either reading; only the ingestion adapter
 depends on the answer.
+
+### GST is summed from stored rows, never recomputed on a batch total
+
+`gst_paise` is computed **once, per row, when the row is created**. Every batch-level GST
+figure is the **sum of stored per-row values**. Never recompute GST from a batch's total
+fee, because half-up rounding does not distribute over addition:
+
+```
+two rows, fee_base = 25 paise each
+
+  per row:   pct_half_up(25, 18, 100) = (25*18 + 50) // 100 = 500 // 100 = 5
+  summed:    5 + 5                                                       = 10   <- correct
+  batch:     pct_half_up(50, 18, 100) = (50*18 + 50) // 100 = 950 // 100 = 9    <- wrong
+```
+
+The two disagree by a paisa. A batch-level "verify the fee" check written the second way
+fails to balance, and it fails looking **exactly like a rounding bug in the data** — the
+most expensive kind of bug to chase, because the arithmetic is what is wrong, not the
+input. Pathology 6 puts half-paisa fees in both datasets specifically so this divergence is
+live rather than theoretical.
+
+**So in the settlement identity, `Σ gst_on_fee` means literally
+`sum(row.gst_paise for row in batch)`** — never `pct_half_up(sum(row.fee_base_paise), 18, 100)`.
+The same rule applies to any other per-row rounded quantity that gets aggregated.
+
+Locked by `tests/test_money.py::test_gst_is_summed_not_recomputed`, which asserts the exact
+25p/25p → 10 vs 9 case above.
 
 ## 4. Sign conventions
 
@@ -185,6 +228,9 @@ rounds is Q-010. Pathology 12 is generated under a stated assumption, and the RE
 - [ ] Every percentage goes through `pct_half_up`.
 - [ ] Every split goes through `split_with_remainder`, with a `sum == total` property test.
 - [ ] Fee and GST are two fields; neither is named `fee` alone.
+- [ ] Every aggregate of a rounded per-row quantity is a **sum of stored values**, never a
+      recomputation from the aggregated base.
+- [ ] Every guard `raise`s. No `assert` in production money code — `-O` strips them.
 - [ ] Amounts are non-negative; direction is a separate field.
 - [ ] δ tolerance is 0; any tolerance elsewhere is justified in `DECISIONS.md`.
 - [ ] Formatting to rupees happens once, in the presentation layer, and flows nowhere back.
