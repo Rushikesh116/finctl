@@ -1,0 +1,16 @@
+# FinCtl direct dependencies.
+#
+# This list is pinned by §3.2 of the project brief. Adding anything here requires
+# explicit approval first (see CLAUDE.md → "Stop and ask before").
+#
+# Every version below was read from `pip show <pkg>` AFTER installing into .venv on
+# Python 3.13.14 (macOS arm64, 2026-08-26). None of these were written from memory.
+# Transitive closure is captured separately in requirements.lock.txt.
+
+anthropic==1.0.0
+fastapi==0.141.1
+numpy==2.5.2
+pydantic==2.13.4
+pytest==9.1.1
+scipy==1.18.1
+uvicorn==0.52.4

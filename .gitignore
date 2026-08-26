@@ -1,0 +1,27 @@
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# --- Secrets ---
+.env
+
+# --- Local Claude Code state (project skills ARE committed) ---
+.claude/settings.local.json
+
+# --- Generated artefacts ---
+# Datasets are deterministic from their seed, so they are regenerated, not committed.
+# `data/DATASET_HASHES.txt` IS committed so drift is detectable (see docs/SPEC.md).
+data/generated/
+
+# SQLite run databases are build output.
+*.db
+*.db-journal
+*.db-wal
+# ...with one deliberate exception: the DEMO_MODE=1 artefact is committed so a judge
+# can run the demo with no API key and no seed step. See docs/DECISIONS.md D-0006.
+!fixtures/demo/finctl_demo.db
+
+# --- OS ---
+.DS_Store

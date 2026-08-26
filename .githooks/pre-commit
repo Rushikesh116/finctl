@@ -1,0 +1,12 @@
+#!/bin/sh
+# FinCtl pre-commit hook: block key-shaped strings from ever entering history.
+# Installed by `make setup` via `git config core.hooksPath .githooks`.
+set -e
+
+if [ -x .venv/bin/python ]; then
+    PY=.venv/bin/python
+else
+    PY="$(command -v python3)"
+fi
+
+exec "$PY" scripts/check_secrets.py
