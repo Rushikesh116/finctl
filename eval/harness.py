@@ -17,8 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from audit.ledger import AuditLedger, verify_chain
-from core import identity, settlement
+from core import identity, results, settlement
 from core.money import format_rupees
+from core.results import EX_AMBIGUOUS
 from core.normalize import NormalizedDataset, load_dataset
 from data.generator import DATASET_SEEDS, dataset_paths
 from eval.groundtruth import GroundTruth, load_ground_truth
@@ -53,6 +54,23 @@ EXCEPTION_OUTCOME = {
 # per-phase ceilings that trajectory implies — see docs/PROGRESS.md.
 UNCLASSIFIED_CEILING = {2: None, 3: 13, 4: 9, 5: 0, 6: 0}
 
+# The two kinds of principled refusal, reported as separate lines forever.
+#
+# They were conflated once — Phase 1 mapped mechanism M5 to pathology 7 because SPEC §4.1
+# describes them as sharing a *principle*, and the result was that `P7 46/46` was dominated by
+# 14 perfectly matchable M5 batch rows and reported on the wrong population. Separating them
+# permanently is cheaper than remembering not to re-conflate them.
+#
+# They are genuinely different questions:
+#   record-level tie  — WHICH of two identical candidates is this record's counterparty?
+#                       (pathology 7: same amount, same day, no distinguishing key)
+#   subset ambiguity  — WHICH subset of pool rows settled in this batch?
+#                       (mechanism M5: several subsets close δ equally well)
+# One is about attribution between records, the other about set membership in a batch. A single
+# "refusals" number cannot tell you which of the two a system is bad at.
+REFUSAL_RECORD_TIE = "P7 record-level tie"
+REFUSAL_SUBSET = "M5 batch subset ambiguity"
+
 
 @dataclass
 class Metrics:
@@ -74,6 +92,8 @@ class Metrics:
     cost_micros_usd: int = 0
     by_mechanism: dict[str, dict[str, int]] = field(default_factory=dict)
     unclassified_records: int = 0
+    # Refusal kinds, reported separately and permanently. See REFUSAL_KINDS.
+    refusals: dict[str, tuple[int, int]] = field(default_factory=dict)
     ledger_entries: int = 0
     ledger_head: str = ""
 
@@ -88,7 +108,7 @@ def _percent(numerator: int, denominator: int, places: int = 1) -> str:
 
 
 def absorb_unresolved(data: NormalizedDataset, result: identity.LayerResult) -> int:
-    """Turn everything no layer settled into one explicit exception. Returns how many.
+    """Terminal classification: type everything that survived the whole cascade. Returns how many.
 
     The cascade's "nothing is silently dropped" contract, in one place. It lives here rather
     than inline in `evaluate` so that anything driving the cascade — the CLI, a test — gets
@@ -103,19 +123,44 @@ def absorb_unresolved(data: NormalizedDataset, result: identity.LayerResult) -> 
     if not leftover:
         return 0
 
-    result.exceptions.append(
-        identity.ReconException(
-            exception_type=identity.EX_UNCLASSIFIED,
-            layer=identity.LAYER,
-            record_ids=tuple(leftover),
-            amount_at_risk_paise=0,
-            detail=(
-                f"{len(leftover)} records reached no layer that could classify them. "
-                "Layers 2-4 are not built, so this count is expected to fall as they land - "
-                "it is a measure of remaining work, not of a defect."
-            ),
+    # An unassigned gateway row that no batch needed is a pending writeback: its settlement
+    # falls outside this export period. That is a real, actionable verdict, and separating it
+    # from UNCLASSIFIED is the difference between a queue an operator can work and one that
+    # says "unclassified" fifty times. It is classified HERE, after every layer has had its
+    # chance at those rows, rather than inside Layer 2.
+    pool = set(result.pool_row_ids)
+    nets = {row.row_id: row.net_paise for row in data.gateway_rows}
+    pending = [row_id for row_id in leftover if row_id in pool]
+    unknown = [row_id for row_id in leftover if row_id not in pool]
+
+    if pending:
+        result.exceptions.append(
+            results.ReconException(
+                exception_type=results.EX_TIMING_OUTSIDE_WINDOW,
+                layer=max(BUILT_LAYERS),
+                record_ids=tuple(pending),
+                amount_at_risk_paise=sum(abs(nets.get(r, 0)) for r in pending),
+                detail=(
+                    f"{len(pending)} gateway rows carry no settlement assignment, and no "
+                    "in-period batch needed them. Their settlement falls outside the period "
+                    "this export covers - pending writeback, not a reconciliation failure."
+                ),
+            )
         )
-    )
+    if unknown:
+        result.exceptions.append(
+            results.ReconException(
+                exception_type=results.EX_UNCLASSIFIED,
+                layer=max(BUILT_LAYERS),
+                record_ids=tuple(unknown),
+                amount_at_risk_paise=0,
+                detail=(
+                    f"{len(unknown)} records reached no layer that could classify them. "
+                    "Every record in this bucket has a home in the enum, so the count measures "
+                    "layers not yet built rather than records that defy classification."
+                ),
+            )
+        )
     return len(leftover)
 
 
@@ -311,6 +356,26 @@ def _score(
 
     metrics.unclassified_records = metrics.by_type.get(identity.EX_UNCLASSIFIED, 0)
 
+    # --- refusals, reported as two distinct kinds ----------------------------------------
+    # A refusal must be *declared*, not merely absent. Scoring "did not match it" as a refusal
+    # gives full marks for never reaching the record at all, which is how a layer that does not
+    # exist yet scores 100% on the pathology it was built to handle. So the record has to land
+    # in an AMBIGUOUS exception specifically.
+    typed_ambiguous = {
+        row_id
+        for exception in result.exceptions
+        if exception.exception_type == EX_AMBIGUOUS
+        for row_id in exception.record_ids
+    }
+    p7_records = [label for label in truth.record_labels if 7 in label.pathologies]
+    p7_correct = sum(
+        1
+        for label in p7_records
+        if label.unmatchable and label.row_id not in engine_group
+        and label.row_id in typed_ambiguous
+    )
+    metrics.refusals[REFUSAL_RECORD_TIE] = (p7_correct, len(p7_records))
+
     # --- per mechanism -------------------------------------------------------------------
     # Ground-truth attribution: SettlementLabel.mechanism says which δ mechanism a batch
     # exhibits, so the block can report Layer 2's behaviour per mechanism rather than as one
@@ -367,6 +432,9 @@ def _score(
             if correct:
                 entry[0] += 1
     metrics.per_pathology = {p: (v[0], v[1]) for p, v in sorted(tally.items())}
+
+    m5 = metrics.by_mechanism.get("multiple_subsets_explain_delta", {})
+    metrics.refusals[REFUSAL_SUBSET] = (m5.get(OUTCOME_REFUSED, 0), m5.get("batches", 0))
 
     return metrics
 
@@ -434,6 +502,20 @@ def render(metrics: Metrics) -> str:
                 f"{'es' if t['batches'] != 1 else '  '}  "
                 + "  ".join(f"{key} {t[key]}" for key in OUTCOME_ORDER)
                 + ("  " + "  ".join(f"{k} {t[k]}" for k in extras) if extras else "")
+            )
+
+    if metrics.refusals:
+        lines.append(
+            "Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose "
+            "- they were conflated once). STRICTER than the by-pathology row below: that asks "
+            "whether the engine avoided a wrong answer, this asks whether it gave the right "
+            "answer for the right reason - a declared AMBIGUOUS, not merely an absence."
+        )
+        for kind, (correct, total) in metrics.refusals.items():
+            unit = "batches" if kind == REFUSAL_SUBSET else "records"
+            lines.append(
+                f"  {kind:<28}{correct:>4}/{total:<4} {unit:<8} "
+                f"{_percent(correct, total):>7}"
             )
 
     if metrics.unclassified_records:

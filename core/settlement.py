@@ -523,34 +523,8 @@ def resolve(
                 )
             )
 
-    # Rows still unassigned after every batch has been searched. Their settlement is simply not
-    # in this period - a pending writeback, not a record that defies classification. Naming that
-    # explicitly is the difference between an exception queue an operator can work and one that
-    # says "unclassified" forty-seven times.
-    already_named = {
-        row_id for exception in result.exceptions for row_id in exception.record_ids
-    }
-    pending_rows = [
-        row.row_id
-        for row in pool
-        if row.row_id not in claimed and row.row_id not in already_named
-    ]
-    if pending_rows:
-        by_id = {row.row_id: row for row in pool}
-        result.exceptions.append(
-            ReconException(
-                exception_type=EX_TIMING_OUTSIDE_WINDOW,
-                layer=LAYER,
-                record_ids=tuple(pending_rows),
-                amount_at_risk_paise=sum(abs(by_id[r].net_paise) for r in pending_rows),
-                detail=(
-                    f"{len(pending_rows)} gateway rows carry no settlement assignment, and no "
-                    "in-period batch's delta is explained by them. Their settlement falls "
-                    "outside the period covered by this export - pending writeback, not a "
-                    "reconciliation failure."
-                ),
-            )
-        )
-
+    # Unclaimed pool rows are deliberately NOT classified here. "Pending writeback" is a
+    # terminal verdict, and Layer 2 is not the last layer: sweeping them up now would consume
+    # rows Layer 3 needs as candidates. The harness classifies what survives the whole cascade.
     result.pool_row_ids = [r for r in pool_row_ids if r not in claimed]
     return result

@@ -31,9 +31,9 @@ than debugging from scratch:
 
 ---
 
-## No entries yet
+## Caught before they could break
 
-Phase 0 was scaffolding; nothing has broken in code. Two things were *caught before* they
+Phase 0 was scaffolding; nothing had broken in code at that point. Two things were *caught before* they
 could break, and they are recorded where they belong rather than dressed up as incidents
 here:
 
@@ -177,3 +177,103 @@ and only then classify what remains. More correct and strictly more resolving.
 **6 resolved / 3**, and auto-match 62.7% → **66.9%**. The disjointness check that caught it was
 itself added in Phase 2 after a mutation test exposed the sum-only version as self-cancelling;
 it has now caught a real bug twice.
+
+---
+
+# The recurring failure: a test that passes while asserting the wrong thing
+
+Four separate instances now, which makes it the dominant failure mode of this project — more
+common than any bug in the reconciliation logic itself. Grouping them here because the pattern
+is the finding, not any individual case.
+
+**The shape.** A check is written, it passes, and the passing is taken as evidence. But the
+check is not testing the property anyone cares about — it tests a *proxy* for it, and the proxy
+and the property come apart later. Nothing fails. The suite stays green. Confidence accrues
+that was never earned, and it accrues *specifically* in the area the check was supposed to
+protect, which is worse than having no check at all: an absent check leaves a known gap, a
+wrong check closes it on paper.
+
+**Why it dominated here.** Every instance sits at a boundary where the property is hard to
+state directly, so a proxy is inviting:
+
+- "the search is hard" → proxied by *pool size*
+- "no record is lost or double-counted" → proxied by a *sum*
+- "the holdout is evaluated once" → proxied by *a sentence in three documents*
+- "pathology 7 is refused" → proxied by *a ground-truth label*
+
+Each proxy is reasonable. Each is also satisfiable without the property holding.
+
+---
+
+### 1. M6's hardness proxied by pool size
+
+`assert oversized["pool_rows_min"] >= 40`, justified by reasoning about meet-in-the-middle.
+**Passed for two phases while asserting nothing useful.** For subset-sum the cost is the depth
+at which the answer sits, not the candidate count: a 3-row answer among 44 candidates is ~14k
+nodes, so M6 *resolved* and `SUBSET_SEARCH_EXHAUSTED` never appeared on dev. The bounded
+search — the thing the brief specifically asks for — shipped two phases without ever being seen
+to stop.
+
+**Now:** the test computes the combinatorial cost of reaching the true subset and asserts it
+exceeds 10M, so it asserts the property rather than a stand-in for it.
+
+### 2. The partition invariant proxied by a sum
+
+`auto_matched + exception_records == N`. A record in **both** places is counted twice, and if
+another is simultaneously lost the errors cancel exactly — the sum reconciles over a set wrong
+in two directions at once. The invariant could not see the class of error it existed to catch.
+
+**Found by accident**, by a mutation test written to prove the *false-match detector* could
+fire. It has since caught a real bug in Layer 2.
+
+**Now:** disjointness is checked independently of the total. Two checks, because one expression
+cannot carry both properties.
+
+### 3. The holdout rule proxied by documentation
+
+`SPEC.md`, `eval-protocol` and `CLAUDE.md` all stated that the holdout is evaluated once, in
+Phase 6. The Phase 0 Makefile passed `--holdout` on every `make eval`. The flag was inert for
+two phases because no harness existed to honour it, so nothing surfaced the contradiction, and
+the first real `make eval` evaluated the holdout.
+
+**Three documents agreeing is not enforcement.** The rule lived in prose and the prose could
+not run.
+
+**Now:** `make eval` cannot reach the holdout; `make eval-holdout` is a separate target that
+announces itself. The one observation is disclosed above rather than deleted.
+
+### 4. Pathology 7 proxied by its label
+
+Two compounding versions of the same mistake.
+
+`P7 46/46` looked like the demo centrepiece working. It was measuring 14 perfectly matchable M5
+batch rows, because Phase 1 mapped mechanism M5 to pathology 7 — `SPEC.md` §4.1 says the two
+share a *principle*, and that became a shared *label*. The population under measurement was
+mostly not the pathology.
+
+Underneath that, the pathology's own data could not exercise it: the twins had **zero**
+same-amount gateway payments, so they were *unmatched*, not *ambiguous*. No correct engine could
+have produced `AMBIGUOUS` against that data. The gate was unmeetable and the metric said 100%.
+
+And a third, caught while fixing the first two: scoring a refusal as "did not match it" gives
+full marks for never reaching the record. `P7 8/8` became `0/8` once the metric required a
+*declared* `AMBIGUOUS`. A layer that does not exist was scoring 100% on the pathology it was
+built to handle.
+
+**Now:** M5 batches carry pathology 1 and their ambiguity is reported per mechanism; the twins
+have gateway counterparts so a genuine 2×2 tie exists; and refusals are reported as two
+permanent, separate lines with the strict definition.
+
+---
+
+**What this changes about how the remaining phases are checked.** For each gate, the question
+is not "does a test pass" but **"could this test pass while the property is false?"** Three
+habits came out of it, all now in use:
+
+1. **Mutation-test the check.** A guard that has never been seen to fail has not been shown to
+   work. Every config guard added since is verified by breaking the config.
+2. **Assert the property, not a stand-in.** Where the property is combinatorial, compute it —
+   the M6 test now calculates the search cost instead of eyeballing a pool size.
+3. **Prefer the strict reading of any metric.** Where "correct" could mean *avoided a wrong
+   answer* or *gave the right answer for the right reason*, report the second. The first
+   flatters exactly the components that do not exist yet.

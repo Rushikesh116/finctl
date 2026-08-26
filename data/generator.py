@@ -59,10 +59,15 @@ REASON_AMBIGUOUS_NO_KEY = "ambiguous_no_distinguishing_key"
 # constructed, since every row records the batch pathology it was built under.
 MECHANISM_PATHOLOGY = {
     "on_hold_release_misdated": 10,
-    "multiple_subsets_explain_delta": 7,
     "credit_without_parseable_utr": 2,
     "duplicate_reference_contamination": 2,
     "missing_bank_row": 8,
+    # `multiple_subsets_explain_delta` is deliberately ABSENT. SPEC §4.1 describes M5 as
+    # sharing pathology 7's *principle*, and Phase 1 wrongly turned that into a label: M5's
+    # batch members were tagged pathology 7, so `P7 46/46` was dominated by 14 perfectly
+    # matchable batch rows and reported on the wrong population entirely. Pathology 7 is the
+    # record-level no-distinguishing-key case (SPEC §5); M5 batches are netting cases, so they
+    # carry pathology 1 and their ambiguity is reported per mechanism where it belongs.
 }
 
 
@@ -703,6 +708,18 @@ class _Generator:
 
         # Pathology 7: two customers, same amount, same day, no distinguishing key. The demo
         # centrepiece — a correct system declines and explains, it does not pick.
+        #
+        # Both SIDES are generated, and that is the fix for a real defect: the original version
+        # emitted only the two merchant rows, so the twins had no same-amount gateway payment
+        # anywhere and were simply *unmatched*. The honest exception for that is
+        # MISSING_GATEWAY_ROW, and no correct engine could have produced AMBIGUOUS — the gate
+        # was unmeetable against its own data.
+        #
+        # Now each case is a 2x2 block: two merchant orders and two gateway payments, all four
+        # identical in amount and day, with no order_receipt or gateway_order_id linking either
+        # side. Amounts match exactly so they *are* candidates under the verifier's Layer 3
+        # contract (D-0024); nothing else discriminates them, so the pairing is undetermined and
+        # refusal is the correct answer.
         for _ in range(2):
             amount = self._amount()
             day = self.period_start + timedelta(days=self.rng.randrange(20))
@@ -720,6 +737,29 @@ class _Generator:
                 )
                 self.merchant.append(twin)
                 self._label(twin.row_id, "merchant", [7], reason=REASON_AMBIGUOUS_NO_KEY)
+
+                # The gateway side of the same tie. Unsettled and unreferenced, so Layers 1-2
+                # cannot claim it and it survives to Layer 3 as a candidate. fee and gst are
+                # zero because it belongs to no batch's netting.
+                counterpart = self._record_gateway(
+                    GatewayRow(
+                        row_id=self._next("gw_"),
+                        type="payment",
+                        entity_id=self._next("pay_"),
+                        debit_paise=0,
+                        credit_paise=amount,
+                        fee_base_paise=0,
+                        gst_paise=0,
+                        currency="INR",
+                        # After the order, so the verifier's causal check passes.
+                        created_at_utc=_ist_epoch(day, 15, 0),
+                        settled=False,
+                        method="card",
+                    )
+                )
+                self._label(
+                    counterpart.row_id, "gateway", [7], reason=REASON_AMBIGUOUS_NO_KEY
+                )
 
         # Pathology 11: adjustment with dispute_id, order_id and payment_id ALL null.
         # dispute_id is the single field separating this from pathology 5 (SPEC §5.1).
