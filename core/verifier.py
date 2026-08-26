@@ -22,10 +22,10 @@ from __future__ import annotations
 
 from core.money import Paise
 from core.normalize import expected_credit_paise
-from core.records import BankRow, GatewayRow
+from core.records import BankRow, GatewayRow, MerchantLedgerRow
 from core.results import EX_VERIFIER_REJECTED, GroupProposal, MatchGroup, ReconException
 
-__all__ = ["ZERO_TOLERANCE_PAISE", "verify"]
+__all__ = ["ZERO_TOLERANCE_PAISE", "verify", "verify_pairing"]
 
 ZERO_TOLERANCE_PAISE = 0
 """Money is exact. A non-zero tolerance is the mechanism by which false matches enter a ledger
@@ -107,4 +107,81 @@ def _reject(proposal: GroupProposal, expected: Paise, reason: str) -> ReconExcep
         record_ids=proposal.record_ids,
         amount_at_risk_paise=abs(expected),
         detail=f"layer {proposal.layer} proposal {proposal.group_id} rejected: {reason}",
+    )
+
+
+def verify_pairing(
+    proposal: GroupProposal,
+    *,
+    merchant_row_id: str,
+    merchant_by_id: dict[str, MerchantLedgerRow],
+    gateway_by_id: dict[str, GatewayRow],
+) -> MatchGroup | ReconException:
+    """Approve a Layer 3 merchant-to-gateway pairing, or reject it. D-0024's contract.
+
+    There is no bank credit in this relation, so the settlement identity does not apply. The
+    checkable arithmetic is a **pairwise equality**, and it is held to the same zero tolerance:
+
+        merchant.amount_paise == gateway.credit_paise      exactly
+        merchant.currency     == gateway.currency
+        merchant.issued_at_utc <= gateway.created_at_utc   an order precedes its payment
+
+    A proposal failing any of these is rejected **regardless of how good its cost was**. Cost
+    decides what gets proposed; arithmetic decides what gets accepted.
+
+    Being precise about what this does and does not guarantee: it makes an *arithmetic* false
+    match impossible — Layer 3 cannot approve a pairing whose amounts disagree. It does not make
+    an *attribution* false match impossible: two records can satisfy exact equality while not
+    being the true pair, which is what pathology 7 is. That risk is confined here, not removed,
+    and the before/after false-match rate is what measures it.
+    """
+    merchant = merchant_by_id.get(merchant_row_id)
+    if merchant is None:
+        return _reject(proposal, 0, f"proposal names ledger row {merchant_row_id} which does not exist")
+
+    if len(proposal.gateway_row_ids) != 1:
+        return _reject(
+            proposal,
+            merchant.amount_paise,
+            f"a pairing names exactly one gateway row, got {len(proposal.gateway_row_ids)}",
+        )
+    gateway = gateway_by_id.get(proposal.gateway_row_ids[0])
+    if gateway is None:
+        return _reject(
+            proposal,
+            merchant.amount_paise,
+            f"proposal names gateway row {proposal.gateway_row_ids[0]} which does not exist",
+        )
+
+    if merchant.amount_paise != gateway.credit_paise:
+        return _reject(
+            proposal,
+            merchant.amount_paise,
+            f"amounts disagree: ledger {merchant.amount_paise} vs gateway credit "
+            f"{gateway.credit_paise}, difference {gateway.credit_paise - merchant.amount_paise} "
+            "paise. Tolerance is zero, so a good cost cannot carry a mismatched amount.",
+        )
+    if merchant.currency != gateway.currency:
+        return _reject(
+            proposal,
+            merchant.amount_paise,
+            f"currencies disagree: {merchant.currency} vs {gateway.currency}",
+        )
+    if merchant.issued_at_utc > gateway.created_at_utc:
+        return _reject(
+            proposal,
+            merchant.amount_paise,
+            "the payment precedes the order it claims to pay, which is not causally possible",
+        )
+    if len(set(proposal.record_ids)) != len(proposal.record_ids):
+        return _reject(proposal, merchant.amount_paise, "proposal contains duplicate record ids")
+
+    return MatchGroup(
+        group_id=proposal.group_id,
+        layer=proposal.layer,
+        record_ids=proposal.record_ids,
+        settlement_id=None,
+        bank_row_id=None,
+        expected_credit_paise=merchant.amount_paise,
+        actual_credit_paise=gateway.credit_paise,
     )

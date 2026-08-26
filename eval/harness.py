@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from audit.ledger import AuditLedger, verify_chain
-from core import identity, results, settlement
+from core import assignment, identity, results, settlement
 from core.money import format_rupees
 from core.results import EX_AMBIGUOUS
 from core.normalize import NormalizedDataset, load_dataset
@@ -25,12 +25,12 @@ from data.generator import DATASET_SEEDS, dataset_paths
 from eval.groundtruth import GroundTruth, load_ground_truth
 from eval.provenance import RunProvenance, capture
 
-PHASE = 3
+PHASE = 4
 
 # Layers that exist. Printed alongside the ones that do not, so the block never implies
 # coverage from a layer that has not been written.
-BUILT_LAYERS = {1: "exact", 2: "netting"}
-PLANNED_LAYERS = {3: "fuzzy", 4: "LLM+verified"}
+BUILT_LAYERS = {1: "exact", 2: "netting", 3: "fuzzy"}
+PLANNED_LAYERS = {4: "LLM+verified"}
 
 # What happened to a δ != 0 batch. Reported per mechanism, because "Layer 2 resolves M1 but
 # not M2" is the diagnostic and a single netting aggregate hides it entirely.
@@ -204,6 +204,23 @@ def evaluate(
                         "FINCTL_AMBIGUOUS_SUBSETS_RECORDED_MAX",
                         settlement.DEFAULT_MAX_EVIDENCE,
                     )
+                ),
+            )
+        )
+
+    # Layer 3 receives every record Layers 1-2 left unmatched. Pool rows reach it because the
+    # pending-writeback sweep is a terminal classification, not Layer 2's to make.
+    if max_layer >= assignment.LAYER:
+        matched = {row_id for group in result.groups for row_id in group.record_ids}
+        named = {row_id for e in result.exceptions for row_id in e.record_ids}
+        spoken_for = matched | named
+        result.merge(
+            assignment.resolve(
+                data,
+                [r.row_id for r in data.merchant_rows if r.row_id not in spoken_for],
+                [r.row_id for r in data.gateway_rows if r.row_id not in spoken_for],
+                window_days=int(
+                    os.environ.get("FINCTL_DATE_WINDOW_DAYS", assignment.DEFAULT_DATE_WINDOW_DAYS)
                 ),
             )
         )
@@ -548,7 +565,7 @@ def render(metrics: Metrics) -> str:
     return "\n".join(lines)
 
 
-ABLATION_ARMS = ((1, "exact only (L1)"), (2, "+ netting (L2)"))
+ABLATION_ARMS = ((1, "exact only (L1)"), (2, "+ netting (L2)"), (3, "+ fuzzy (L3)"))
 
 
 def render_ablation(dataset_name: str) -> str:

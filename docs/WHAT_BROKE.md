@@ -277,3 +277,29 @@ habits came out of it, all now in use:
 3. **Prefer the strict reading of any metric.** Where "correct" could mean *avoided a wrong
    answer* or *gave the right answer for the right reason*, report the second. The first
    flatters exactly the components that do not exist yet.
+
+---
+
+## 2026-08-26 — a change made to give Layer 3 work made the exception queue worse
+
+**Symptom.** Layer 3 resolved **0** records. Investigating showed 42 of the 46 ledger rows
+reaching it had their gateway counterpart already named in an exception, so no candidate existed.
+Releasing those rows from batch-level exceptions looked like the fix.
+
+**Diagnosis.** It gained Layer 3 nothing — the counterparts were still inside unresolved batches,
+so there was still nothing to pair against — and it moved 38 records from a specific verdict
+("this batch is unresolved, here is every record in it") into `UNCLASSIFIED`. Strictly less
+information, in the file the track bar calls the deliverable.
+
+The reasoning error was treating a record's presence in an exception as a *cascade artefact*
+blocking a later layer, when it was a *fact*: attributing an order to a payment that is itself
+unreconciled does not reconcile the order. The 42 are blocked upstream, correctly.
+
+**Fix.** Reverted. Batch exceptions name their ledger rows again, and the reverted state is
+commented at both call sites so the next person does not retry it.
+
+**Metric before → after.** `UNCLASSIFIED` 4 → 42 → **0**. Layer 3's coverage contribution was 0
+in every version; the release bought nothing and cost 38 records' worth of specificity.
+
+**Caught by** the phase-4 `UNCLASSIFIED` ceiling on the first test run after the change — a gate
+written two phases earlier, which activated automatically when `harness.PHASE` became 4.

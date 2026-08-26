@@ -455,6 +455,9 @@ def resolve(
     # --- classify what is left ----------------------------------------------------------
     for batch in pending:
         outcome, _ = final[batch.settlement_id]
+        # Ledger rows included. An unresolved settlement is a fact about every record in the
+        # batch, and attributing an order to a payment that is itself unreconciled does not
+        # reconcile the order -- so there is nothing for Layer 3 to gain by holding them back.
         record_ids = batch.member_row_ids + (batch.bank_row_id,) + batch.merchant_row_ids
         at_risk = abs(batch.delta_paise)
 

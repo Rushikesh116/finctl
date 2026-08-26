@@ -7,6 +7,97 @@ output. A result that has not been run is `TBD`. See
 
 ---
 
+## Phase 4 — Layer 3 (fuzzy matching and global assignment)
+
+```
+$ git rev-parse --short HEAD
+1e9e225
+$ date -u '+%Y-%m-%d %H:%M UTC'
+2026-08-26 17:27 UTC
+$ make eval
+Dataset: dev_seed_11  data d93197db   SHA: 1e9e225   2026-08-26 17:27
+Records processed         481          Wall clock    0.025s
+Auto-matched              319    66.3%   Throughput  19143 rec/s
+  Layer 1  exact            242    50.3%
+  Layer 2  netting           77    16.0%
+  Layer 3  fuzzy              0     0.0%
+  Layer 4  LLM+verified      --       --   not built yet
+False matches               0    0.00%   <- precision, not coverage
+Exceptions                162    33.7%    Rs 1,24,31,354.37 at risk
+  correctly flagged       107    66.0%
+  missed matches           55    34.0%
+  by type: TIMING_OUTSIDE_WINDOW 53, AMBIGUOUS 50, MISSING_BANK_ROW 40, SUBSET_SEARCH_EXHAUSTED 17, MISSING_GATEWAY_ROW 2
+  by class: absent 57, undetermined 50
+LLM calls                   0          Calls / 100  0.0%
+Cost / 1000            Rs TBD          USD 0.000000 total
+Audit ledger               35 entries   head 91f524bb07d0
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       2 batches  resolved 0  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 2
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0
+  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0
+Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.
+  P7 record-level tie            8/8    records   100.0%
+  M5 batch subset ambiguity      2/2    batches   100.0%
+By pathology  (records carry >=1, so these OVERLAP and do not sum to 481)
+  P1   409/464  P2    24/46   P3    12/16   P4     3/3    P5     4/4    P6    16/20
+  P7     8/8    P8    20/20   P9    37/37   P10   34/34   P11    2/2    P12   10/12
+
+Ablation (same dataset, layers enabled cumulatively)
+  arm                  auto-match   false-match   exceptions   UNCLASSIFIED
+  exact only (L1)          50.3%         0.00%          239            108
+  + netting (L2)           66.3%         0.00%          162              4   +16.0pp
+  + fuzzy (L3)             66.3%         0.00%          162              0   +0.0pp
+  + LLM+verified (L4)         --            --           --             --   not built
+  False-match rate is reported on every arm: an arm that raises coverage while also
+  raising false matches is a regression being sold as an improvement.
+```
+
+### The before/after pair, on one dataset SHA
+
+This pair is the whole justification for the layer, so it is reported in full rather than
+summarised.
+
+| | before (L1+L2) | after (+L3) | delta |
+|---|---|---|---|
+| auto-matched records | 319 | 319 | **+0** |
+| auto-match rate | 66.3% | 66.3% | **+0.0pp** |
+| **false matches** | **0** | **0** | **+0** |
+| **false-match rate** | **0.00%** | **0.00%** | **+0.00pp** |
+| exception records | 162 | 162 | +0 |
+| correctly flagged | 107 | 107 | +0 |
+| missed matches | 55 | 55 | +0 |
+| **`UNCLASSIFIED`** | **4** | **0** | **−4** |
+| P7 refusal, declared | 0/8 | **8/8** | +8 |
+
+**What was bought, and for what.** Layer 3 bought **no coverage and no additional false-match
+risk**. What it bought is the last of the exception queue's precision: `UNCLASSIFIED` reached
+**zero**, and the eight pathology-7 records went from "we could not classify these" to a
+declared `AMBIGUOUS` carrying all four candidate pairings as evidence, each with the amount it
+satisfies. The exception-type histogram shows the transfer exactly — `AMBIGUOUS` 42 → 50,
+`TIMING_OUTSIDE_WINDOW` 57 → 53, `UNCLASSIFIED` 4 → 0.
+
+That is a real gain and it is not a coverage gain. Saying so plainly matters more than the
+number: **the price paid was zero, so nothing was traded.** The attribution risk D-0024 warned
+about is genuine but did not materialise here, because the only pairings Layer 3 found were
+interchangeable ones it refused.
+
+**Why coverage did not move, established rather than assumed.** 46 ledger rows reach Layer 3
+and only **4** have any candidate at all. The other **42 have their counterpart already named in
+an exception** — their payments sit in batches Layer 2 could not resolve. That is not a Layer 3
+defect and not a cascade artefact: attributing an order to a payment that is itself unreconciled
+does not reconcile the order. Those 42 are blocked upstream, and resolving them is Layer 2's or
+Layer 4's work.
+
+**A change made to "help" Layer 3 was tried and reverted.** Releasing ledger rows from batch
+exceptions so Layer 3 could see them gained it nothing — the counterparts were still blocked —
+and moved 38 records from a specific verdict into `UNCLASSIFIED`, which is strictly less
+information. The phase-4 `UNCLASSIFIED` ceiling caught it on the first test run.
+
+---
+
 ## Current baseline — dataset `d93197db`, all arms
 
 **Every row in the run log below is on this one dataset SHA.** Earlier rows measured
@@ -264,7 +355,7 @@ It is not comparable to them, however similar the numbers look.
 |---|---|---|---|---|---|---|---|
 | 2 — exact only (L1) | `dev_seed_11` | `d93197db` | 50.3% | 0.00% | 239 | `6244f91` | 2026-08-26 |
 | 3 — + netting (L2) | `dev_seed_11` | `d93197db` | 66.3% | 0.00% | 162 | `6244f91` | 2026-08-26 |
-| 4 — + fuzzy (L3) | `dev_seed_11` | TBD | TBD | TBD | TBD | TBD | TBD |
+| 4 — + fuzzy (L3) | `dev_seed_11` | `d93197db` | 66.3% | 0.00% | 162 | `1e9e225` | 2026-08-26 |
 | 5 — + LLM (L4) | `dev_seed_11` | TBD | TBD | TBD | TBD | TBD | TBD |
 | 6 (final, once) | `holdout_seed_97` | TBD | TBD | TBD | TBD | TBD | TBD |
 

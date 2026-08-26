@@ -23,8 +23,8 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 3 complete. 66.9% auto-match, 0.00% false matches, all three
-Layer 2 outcomes demonstrated. Next is Phase 4 — fuzzy matching and global assignment.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
+**Current phase: Phase 4 complete. 66.3% auto-match, 0.00% false matches, UNCLASSIFIED at
+zero. Next is Phase 5 — LLM adjudication behind the verifier.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
 wins.
 
 ---

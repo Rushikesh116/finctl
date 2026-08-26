@@ -115,6 +115,11 @@ def resolve(dataset: NormalizedDataset) -> LayerResult:
                 ReconException(
                     exception_type=EX_MISSING_BANK_ROW,
                     layer=LAYER,
+                    # Merchant rows ARE named. Releasing them to Layer 3 was tried and
+                    # reverted: their gateway counterparts sit in the same unresolved batches,
+                    # so Layer 3 could pair none of them, and the release moved 38 records from
+                    # a specific verdict to UNCLASSIFIED. An unresolved batch is a fact about
+                    # every record in it, ledger rows included.
                     record_ids=tuple(row.row_id for row in members) + merchant_ids,
                     amount_at_risk_paise=_amount_at_risk(members, [], []),
                     detail=(

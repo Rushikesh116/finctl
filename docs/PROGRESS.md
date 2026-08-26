@@ -213,7 +213,25 @@ The hardest algorithmic piece.
 
 ---
 
-## Phase 4 — fuzzy matching and global assignment · IN PROGRESS
+## Phase 4 — fuzzy matching and global assignment · **PASS** (2026-08-26)
+
+**Gate evidence.** `231 passed, 1 skipped`. Before/after on one dataset SHA (`d93197db`):
+auto-match **66.3% → 66.3%**, false matches **0.00% → 0.00%**, `UNCLASSIFIED` **4 → 0**,
+pathology-7 refusal **0/8 → 8/8** declared with all four candidate pairings as evidence.
+
+**Layer 3 bought exception-queue precision, not coverage, at zero cost.** 46 ledger rows reach
+it and only 4 have any candidate; the other 42 have their counterpart already named in an
+exception because their payments sit in batches Layer 2 could not resolve. Attributing an order
+to an unreconciled payment does not reconcile it, so those are blocked upstream by design.
+
+- [x] Candidate generation: exact amount equality, exact currency, causal ordering, date window
+- [x] Cost matrix solved with `scipy.optimize.linear_sum_assignment` — never greedy (D-0002)
+- [x] Ambiguity rule at the **pre-registered** margin of zero (D-0023), tested by **necessity**:
+      forbid an assigned pair, re-solve, and if the optimum is unchanged nothing determined it.
+      Catches global degeneracy that a per-row tie check would match and get wrong twice
+- [x] `verifier.verify_pairing` enforces D-0024's contract; a mismatched amount is rejected
+      however good its cost
+- [x] **`UNCLASSIFIED` == 0**, three phases ahead of its Phase 5 target
 
 **Pre-registered before any Layer 3 run, so neither can be fitted to dev:**
 
