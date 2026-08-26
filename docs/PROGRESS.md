@@ -6,16 +6,18 @@ this file wins.
 
 > ## Next action
 >
-> **Phase 2 — normalisation, Layer 1, the audit ledger, and harness v1.**
+> **Phase 3 — settlement decomposition. The hardest algorithmic piece.**
 >
-> Build order: `core/normalize.py` → `core/identity.py` → `audit/ledger.py` →
-> `eval/harness.py`. Then paste the baseline metrics block into `docs/METRICS.md` with its
-> command and git SHA. Expect roughly 85% on exact matching alone; **whatever it prints is
-> the number every later phase is measured against**, so it gets recorded before anything is
-> tuned.
+> Layer 1's baseline is **50.7%** and it hands Layer 2 exactly 12 candidate batches with a
+> non-zero δ, each carrying its δ and its pool. Build order: balance-identity fast path →
+> bounded subset search → the `AMBIGUOUS` refusal with §4.2 evidence.
 >
-> `docs/SPEC.md` is **frozen** as of the Phase 1 gate. Changing it needs a `DECISIONS.md`
-> entry and approval.
+> The three outcomes Phase 3 must demonstrate on **both** datasets, all guaranteed present by
+> the mechanism floors: Layer 2 succeeding (M1/M2), refusing when several subsets close δ
+> (M5, ≥2 cases, one exceeding the evidence cap), and exhausting its budget honestly (M6,
+> pool of 44). A bounded search that only ever succeeds has not demonstrated its bound.
+>
+> `docs/SPEC.md` is **frozen**. Changing it needs a `DECISIONS.md` entry and approval.
 >
 > Outstanding questions, none blocking: **Q-004** (USD→INR rate; the harness prints `Rs TBD`
 > until one is pinned), **Q-002/Q-005/Q-006/Q-007/Q-010/Q-011/Q-014** (domain facts no fetched
@@ -113,28 +115,57 @@ not a perturbation of the data. Determinism re-verified across all four processe
 
 ---
 
-## Phase 2 — normalisation, Layer 1, audit ledger, harness v1 · TODO
+## Phase 2 — normalisation, Layer 1, audit ledger, harness v1 · **PASS** (2026-08-26)
 
-- [ ] `core/normalize.py` — schema mapping, the UTC/IST asymmetry (`SPEC.md` §3.4), currency
-      normalisation
-- [ ] `core/identity.py` — Layer 1 exact matching on bank reference, payment id, order id
-- [ ] `audit/ledger.py` — append-only, **hash-chained**; every decision records layer,
-      inputs, output, confidence, timestamp, and model version + token cost when an LLM was
-      involved
-- [ ] `eval/harness.py` — prints the full metrics block, even though most layers do not
-      exist yet
+**Gate evidence.** `173 passed, 0 skipped`. Baseline pasted verbatim into `docs/METRICS.md`
+with its command, git SHA `a2687b1` and dataset SHA `371df9be`.
+
+| Measure | dev_seed_11 |
+|---|---|
+| Records | 477 |
+| **Auto-matched (Layer 1 only)** | **242 — 50.7%** |
+| False matches | **0 — 0.00%** |
+| Exceptions | 235 — 49.3%, Rs 29,56,629.16 at risk |
+| correctly flagged / missed | 116 / 119 |
+| by class | absent 70, undetermined 46 |
+| Audit ledger | 33 entries, chain verified, byte-identical across processes |
+
+**50.7%, not ~85%, and that is the honest number.** The datasets are deliberately
+pathology-dense and Layer 1 approves only where the identity balances at zero tolerance
+(D-0018). A join that skipped the arithmetic would report more coverage and mean less.
+
+**The 0.00% false-match rate was investigated, not celebrated**, per anti-hallucination
+protocol item 7. It is structural — every approved group balanced at δ == 0 exactly — and the
+detector was mutation-tested to prove it can fire.
+
+Two defects found and logged in `docs/WHAT_BROKE.md`: `make eval` was evaluating the holdout
+on every run (Phase 0 Makefile defect, now split into `make eval-holdout`, and the one
+observation disclosed), and the partition invariant had a self-cancelling blind spot that a
+mutation test exposed.
+
+- [x] `core/normalize.py` — schema mapping, the UTC/IST asymmetry (`SPEC.md` §3.4), currency
+      normalisation. Both failure directions of the interval rule are tested
+- [x] `core/identity.py` — Layer 1 exact matching, approving **only** at zero tolerance
+      (D-0018). Refuses on an ambiguous reference; treats absence as absence, not a search
+- [x] `audit/ledger.py` — append-only, **hash-chained**, no wall-clock so replay is
+      byte-comparable (D-0017). Tampering, removal and reordering are all detected
+- [x] `eval/harness.py` — full metrics block with provenance, per-pathology overlap caveat,
+      and the ablation table
+- [x] `cli.py reconcile` — `make run` writes the ledger to SQLite for inspection
 - [x] `eval/provenance.py` — git SHA + **dataset SHA** + timestamp per run, with `drift` and
       `absent` surfaced inline in the header. Landed early because the harness must emit it
       from its very first run, or the baseline row is unattributable
 
 **Gate:**
-- [ ] `make eval` prints real numbers with only exact matching enabled (expect roughly 85%)
-- [ ] `auto_matched + exception_records == N` asserted, **raising** not asserting
-- [ ] The metrics block header carries the dataset SHA from
-      `eval/provenance.capture()`, and prints `!! DRIFT` when disk and manifest disagree
-- [ ] Per-pathology counts print with their overlap caveat on the header line (D-0016)
-- [ ] Baseline pasted into `docs/METRICS.md` with command, git SHA **and dataset SHA**.
-      **This is what every later improvement is measured against**
+- [x] `make eval` prints real numbers with only exact matching enabled — **50.7%**, not the
+      anticipated ~85%, for the reasons recorded above and in D-0018
+- [x] `auto_matched + exception_records == N` **raises**, and disjointness is checked
+      separately after a mutation test found the sum alone self-cancelling
+- [x] The metrics block header carries the dataset SHA and prints `!! DRIFT` on disagreement
+- [x] Per-pathology counts print with their overlap caveat on the header line (D-0016)
+- [x] Baseline pasted into `docs/METRICS.md` with command, git SHA and dataset SHA
+- [x] Audit chain verified on every run; two runs byte-identical, including under a different
+      `PYTHONHASHSEED`
 
 ---
 

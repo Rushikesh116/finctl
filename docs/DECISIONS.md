@@ -369,3 +369,54 @@ inconsistency in the measurement rather than as a property of the labelling.
 Guarded by `test_at_least_one_record_carries_more_than_one_pathology`, which asserts overlap
 *exists* — so a future "simplification" back to an override fails instead of silently
 reverting. *2026-08-26*
+
+---
+
+## D-0017 — audit ledger entries carry no wall-clock timestamp
+
+**Context.** A decision log ordinarily timestamps its entries. Invariant 4 requires the same
+seed and input to produce a **byte-identical** audit log.
+
+**Decision.** Ledger entries carry a monotonic `seq` and no wall-clock field at all. Run
+wall-clock lives in the metrics block, where it is a measurement rather than part of a hashed
+record.
+
+**Why.** A timestamp makes byte-identity impossible: every run differs, the hash chain cannot
+be verified against a recorded one, and "deterministic and replayable" becomes an
+unfalsifiable claim — the most expensive kind, because it reads as a guarantee. A sequence
+number is a logical clock and is all the ordering a decision log needs; nothing downstream asks
+when an entry was written, only in what order.
+
+**Alternatives rejected.**
+- *Timestamp outside the hashed payload* — the file still differs between runs, so the
+  byte-comparison that proves replay still cannot be made.
+- *Truncate the timestamp to the run start* — constant within a run, so it adds nothing a
+  run-level field does not already carry, and reintroduces the temptation to make it finer.
+
+Guarded by `tests/test_ledger.py::test_no_entry_carries_a_wall_clock_field`, which fails on a
+well-meaning future addition, and by
+`::test_two_identical_runs_produce_byte_identical_logs`. Verified across separate processes and
+under `PYTHONHASHSEED=999`. *2026-08-26*
+
+---
+
+## D-0018 — Layer 1 approves only where the identity balances at zero tolerance
+
+**Context.** Layer 1 could approve a group as soon as the keys join. It would score much
+better: joining `settlement_utr` to `BankRow.reference` succeeds on far more batches than
+balancing does.
+
+**Decision.** A join produces a *candidate*. Layer 1 approves only after recomputing the
+settlement identity and finding `δ == 0` exactly. Batches that join but do not balance are
+handed to Layer 2, not approved.
+
+**Why.** A join is not a reconciliation. The whole claim of this project is that a matched
+ledger entry means the money is accounted for, and a group that has not been checked
+arithmetically does not support that claim — it supports a weaker one, silently. This is also
+what makes the 0.00% false-match rate structural rather than lucky: a group with a wrong member
+cannot balance unless its arithmetic coincidentally sums.
+
+The visible cost is the headline: the Phase 2 baseline is **50.7%**, not the ~85% the brief
+anticipates. That is the honest number for a pathology-dense dataset under a verifying Layer 1,
+and it leaves the headroom for Layers 2–4 to earn rather than borrowing it up front.
+*2026-08-26*

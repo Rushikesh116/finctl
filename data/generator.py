@@ -799,6 +799,22 @@ def emit(dataset: GeneratedDataset) -> list[Path]:
     return [merchant_path, gateway_path, bank_path, labels_path]
 
 
+def dataset_paths(name: str) -> dict[str, Path]:
+    """Where a dataset's four emitted files live.
+
+    One place owns the naming convention. `core/normalize.py` takes explicit paths and never
+    learns it, so nothing in the matcher depends on how datasets happen to be laid out.
+    """
+    if name not in DATASET_SEEDS:
+        raise ValueError(f"unknown dataset {name!r}; expected one of {sorted(DATASET_SEEDS)}")
+    return {
+        "merchant": OUTPUT_DIR / f"{name}_merchant_ledger.csv",
+        "gateway": OUTPUT_DIR / f"{name}_gateway_recon.json",
+        "bank": OUTPUT_DIR / f"{name}_bank_statement.csv",
+        "labels": OUTPUT_DIR / f"{name}_labels.json",
+    }
+
+
 def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

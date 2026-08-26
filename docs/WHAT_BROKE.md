@@ -54,3 +54,54 @@ Two more caught at the Phase 1 spec review, before any code was written against 
 
 None of the four is a failure log entry, because none has produced a wrong number in a run.
 If one does, it gets an entry with the metric on both sides.
+
+---
+
+## 2026-08-26 — `make eval` evaluated the holdout on every run
+
+**Symptom.** The first Phase 2 `make eval` printed metrics blocks for **both** datasets. The
+holdout is specified to be evaluated exactly once, in Phase 6.
+
+**Diagnosis.** The Phase 0 Makefile defined `eval` as
+`--dev $(DEV_DATASET) --holdout $(HOLDOUT_DATASET) --ablation`. It was written before the
+harness existed, so the flag was inert for two phases and nothing surfaced it. `SPEC.md`,
+`eval-protocol` and `CLAUDE.md` all state the once-only rule; the Makefile quietly contradicted
+all three, and the discipline lived only in prose.
+
+**Fix.** `make eval` now runs the dev dataset only. The holdout moved to a separate
+`make eval-holdout` target that announces what it is doing before it runs. A rule enforced
+only by documentation is not enforced.
+
+**Disclosure, because this matters more than the fix.** The holdout *was* evaluated, once, at
+`a2687b1`: **auto-match 50.8%, false matches 0.00%, exceptions 236 of 480.** Recording it here
+rather than deleting it — a holdout observation that goes unmentioned is worse than one that is
+disclosed. Nothing has been tuned in response to it, and nothing will be: the number sits within
+0.1pp of dev, so it carries no signal worth acting on even if I were willing to. Phase 6's
+single evaluation stands as the reported result.
+
+**Metric before → after.** No metric changed. What changed is that the leak can no longer
+recur: `make eval` cannot touch the holdout.
+
+---
+
+## 2026-08-26 — the partition invariant had a blind spot that cancelled itself out
+
+**Symptom.** A mutation test that moved a record into an approved group *while it was still
+listed in an exception* did not trip the partition check. It was supposed to.
+
+**Diagnosis.** The check was `auto_matched + exception_records == N`. A record counted in both
+places is counted twice — and if some other record is simultaneously lost from both, the two
+errors are equal and opposite. **The sum still reconciles over a set that is wrong in two
+directions at once.** Exactly the class of error the invariant exists to catch, and the
+invariant could not see it.
+
+Worth noting how it was found: not by reading the code, but by a test written to prove the
+*false-match detector* could fire. The blind spot was collateral.
+
+**Fix.** Disjointness is now checked independently of the total: no record may appear in both a
+match group and an exception, and the error names the offending ids. Two checks, because one
+cannot express both properties.
+
+**Metric before → after.** Baseline unchanged at 50.7% / 0.00% / 235 — the real run was never
+in the failing state. What changed is that the check can now detect it, verified by
+`tests/test_harness.py::test_a_record_cannot_be_both_matched_and_excepted`.

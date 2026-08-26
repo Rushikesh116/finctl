@@ -10,7 +10,7 @@ DEV_DATASET      ?= dev_seed_11
 HOLDOUT_DATASET  ?= holdout_seed_97
 
 .DEFAULT_GOAL := help
-.PHONY: help setup hooks seed run eval report serve test demo clean
+.PHONY: help setup hooks seed run eval eval-holdout report serve test demo clean
 
 help:
 	@echo "FinCtl targets"
@@ -43,6 +43,13 @@ run:
 	$(PY) -m cli reconcile --dataset $(DEV_DATASET)
 
 eval:
+	$(PY) -m eval.harness --dev $(DEV_DATASET) --ablation
+
+# Deliberately NOT part of `make eval`. The holdout is evaluated ONCE, in Phase 6.
+# Iterating against it converts it into a training set and every number after that is a lie.
+eval-holdout:
+	@echo "About to evaluate $(HOLDOUT_DATASET). This is a Phase 6, once-only action."
+	@echo "Whatever it prints is what ships, even if it is worse than dev."
 	$(PY) -m eval.harness --dev $(DEV_DATASET) --holdout $(HOLDOUT_DATASET) --ablation
 
 report:

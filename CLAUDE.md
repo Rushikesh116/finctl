@@ -23,8 +23,8 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 1 complete, `docs/SPEC.md` frozen. Next is Phase 2 —
-`core/normalize.py`, Layer 1, the audit ledger, harness v1.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
+**Current phase: Phase 2 complete. Baseline recorded at 50.7% auto-match, 0.00% false
+matches. Next is Phase 3 — bounded settlement decomposition.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
 wins.
 
 ---
@@ -79,7 +79,8 @@ Re-read them at the start of every session.
 | `make setup` | Creates `.venv` on `python3.13`, installs the pinned deps from `requirements.txt`, and points `core.hooksPath` at `.githooks` so the secret scan runs on every commit |
 | `make seed` | Generates both datasets — `dev_seed_11` and `holdout_seed_97` — into `data/generated/`, deterministically from their seeds |
 | `make run` | Reconciles the dev dataset and writes the match ledger plus the hash-chained audit log to SQLite |
-| `make eval` | The full harness: dev + holdout + ablation. Prints the metrics block that gets pasted into `docs/METRICS.md` |
+| `make eval` | The harness on the **dev** dataset plus the ablation table. Prints the metrics block that gets pasted into `docs/METRICS.md` |
+| `make eval-holdout` | Phase 6 **only**, once: also evaluates the holdout. Deliberately not part of `make eval` — iterating against a holdout converts it into a training set |
 | `make report` | Renders the static run report to `docs/index.html`, data inlined — no server, no fetch, no build step |
 | `make serve` | Runs the FastAPI app on `:8000`, serving both the JSON API and the UI from one process |
 | `make test` | Runs pytest |
