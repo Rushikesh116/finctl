@@ -23,8 +23,8 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 4 complete. 66.3% auto-match, 0.00% false matches, UNCLASSIFIED at
-zero. Next is Phase 5 — LLM adjudication behind the verifier.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
+**Current phase: Phase 5 complete. 76.2% auto-match, 0.00% false matches. Next is Phase 6 —
+UI, static report, deploy, and the single holdout evaluation.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
 wins.
 
 ---
@@ -83,6 +83,7 @@ Re-read them at the start of every session.
 | `make eval-holdout` | Phase 6 **only**, once: also evaluates the holdout. Deliberately not part of `make eval` — iterating against a holdout converts it into a training set |
 | `make report` | Renders the static run report to `docs/index.html`, data inlined — no server, no fetch, no build step |
 | `make serve` | Runs the FastAPI app on `:8000`, serving both the JSON API and the UI from one process |
+| `make llm-curve` | LLM calls per run as the regex cache fills — two curves, isolating promotion from replay |
 | `make test` | Runs pytest |
 | `make demo` | `seed` + `run` + `eval` + `report` in one command, from clean, **with no API key set**. This is what a judge runs |
 | `make clean` | Removes generated datasets, run databases, and caches |

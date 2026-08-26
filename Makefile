@@ -10,7 +10,7 @@ DEV_DATASET      ?= dev_seed_11
 HOLDOUT_DATASET  ?= holdout_seed_97
 
 .DEFAULT_GOAL := help
-.PHONY: help setup hooks seed run eval eval-holdout report serve test demo clean
+.PHONY: help setup hooks seed run eval eval-holdout llm-curve report serve test demo clean
 
 help:
 	@echo "FinCtl targets"
@@ -51,6 +51,9 @@ eval-holdout:
 	@echo "About to evaluate $(HOLDOUT_DATASET). This is a Phase 6, once-only action."
 	@echo "Whatever it prints is what ships, even if it is worse than dev."
 	$(PY) -m eval.harness --dev $(DEV_DATASET) --holdout $(HOLDOUT_DATASET) --ablation
+
+llm-curve:
+	$(PY) -m scripts.llm_curve --runs 4
 
 report:
 	$(PY) -m scripts.render_report --out docs/index.html

@@ -273,7 +273,21 @@ chance, or Layer 2 will claim rows Layer 3 needed as candidates.
 
 ---
 
-## Phase 5 — LLM adjudication behind the verifier · TODO
+## Phase 5 — LLM adjudication behind the verifier · **PASS** (2026-08-26)
+
+**Gate evidence.** `254 passed, 1 skipped`. Auto-match **66.3% → 76.2%**, false matches
+**0.00% → 0.00%**. Parse calls **3 → 1** with 2 regexes promoted and nothing replayed;
+explanation calls steady at 5. `1.43` calls per 100 records cold, `0.00` on replay.
+`DEMO_MODE=1 make eval` completes from fixtures, and a cache miss raises rather than reaching
+the network.
+
+**Scope was fixed at three items and held there.** Five capabilities that looked tempting are
+logged in `docs/OPEN_QUESTIONS.md` under "Out of scope" rather than built — including
+LLM disambiguation of `AMBIGUOUS` refusals, which would actively make the system worse.
+
+**The honesty caveat that matters:** no call has ever reached the API. No credential exists in
+this environment, so every LLM figure came from `OfflineProposer`, fixtures are tagged
+`offline_stub`, and the metrics block says so on the same line as the numbers.
 
 Layer 4 sees only what survived Layers 1–3 — target **under 5%** of the batch.
 

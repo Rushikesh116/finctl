@@ -1,0 +1,15 @@
+{
+  "model": "claude-opus-5",
+  "response": {
+    "confidence": 75,
+    "reasoning": "anchored on the literal text surrounding '1888481283mjoasu'",
+    "reference": "1888481283mjoasu",
+    "regex": "IMPS/([A-Za-z0-9]{8,40})/RAZ"
+  },
+  "schema": "narration_parse",
+  "source": "offline_stub",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

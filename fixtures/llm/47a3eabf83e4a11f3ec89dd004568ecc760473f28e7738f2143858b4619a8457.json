@@ -1,0 +1,15 @@
+{
+  "model": "claude-opus-5",
+  "response": {
+    "confidence": 90,
+    "reasoning": "no token in this narration looks like a settlement reference",
+    "reference": null,
+    "regex": null
+  },
+  "schema": "narration_parse",
+  "source": "offline_stub",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

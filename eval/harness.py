@@ -11,13 +11,15 @@ Whatever this prints is what ships. Nothing here is tuned to hit a number.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from audit.ledger import AuditLedger, verify_chain
-from core import assignment, identity, results, settlement
+from core import adjudicate, assignment, identity, llm, results, settlement
+from core.rules_cache import RulesCache
 from core.money import format_rupees
 from core.results import EX_AMBIGUOUS
 from core.normalize import NormalizedDataset, load_dataset
@@ -25,12 +27,12 @@ from data.generator import DATASET_SEEDS, dataset_paths
 from eval.groundtruth import GroundTruth, load_ground_truth
 from eval.provenance import RunProvenance, capture
 
-PHASE = 4
+PHASE = 5
 
 # Layers that exist. Printed alongside the ones that do not, so the block never implies
 # coverage from a layer that has not been written.
-BUILT_LAYERS = {1: "exact", 2: "netting", 3: "fuzzy"}
-PLANNED_LAYERS = {4: "LLM+verified"}
+BUILT_LAYERS = {1: "exact", 2: "netting", 3: "fuzzy", 4: "LLM+verified"}
+PLANNED_LAYERS: dict[int, str] = {}
 
 # What happened to a δ != 0 batch. Reported per mechanism, because "Layer 2 resolves M1 but
 # not M2" is the diagnostic and a single netting aggregate hides it entirely.
@@ -89,7 +91,14 @@ class Metrics:
     at_risk_paise: int = 0
     per_pathology: dict[int, tuple[int, int]] = field(default_factory=dict)
     llm_calls: int = 0
+    llm_cache_hits: int = 0
+    llm_calls_by_kind: dict[str, int] = field(default_factory=dict)
+    llm_mode: str = "-"
+    llm_stubbed: bool = False
     cost_micros_usd: int = 0
+    rules_total: int = 0
+    rules_promoted: int = 0
+    adjudication: adjudicate.AdjudicationReport | None = None
     by_mechanism: dict[str, dict[str, int]] = field(default_factory=dict)
     unclassified_records: int = 0
     # Refusal kinds, reported separately and permanently. See REFUSAL_KINDS.
@@ -164,6 +173,91 @@ def absorb_unresolved(data: NormalizedDataset, result: identity.LayerResult) -> 
     return len(leftover)
 
 
+def _unlinked_batches(
+    data: NormalizedDataset, result: identity.LayerResult
+) -> list[results.CandidateBatch]:
+    """Settlements Layer 1 raised MISSING_BANK_ROW for, rebuilt as Layer 4 input.
+
+    Reconstructed from the dataset rather than threaded through the cascade, so Layer 4 depends
+    on the *data* rather than on an earlier layer's bookkeeping.
+    """
+    named = {
+        row_id
+        for e in result.exceptions
+        if e.exception_type == results.EX_MISSING_BANK_ROW
+        for row_id in e.record_ids
+    }
+    if not named:
+        return []
+
+    batches: dict[str, list] = {}
+    for row in data.gateway_rows:
+        if row.settlement_id and row.row_id in named:
+            batches.setdefault(row.settlement_id, []).append(row)
+
+    merchant_by_receipt: dict[str, list[str]] = {}
+    for row in data.merchant_rows:
+        merchant_by_receipt.setdefault(row.order_ref, []).append(row.row_id)
+
+    out = []
+    for settlement_id in sorted(batches):
+        members = sorted(batches[settlement_id], key=lambda r: r.row_id)
+        utr = next((m.settlement_utr for m in members if m.settlement_utr), None)
+        merchant_ids = tuple(
+            sorted(
+                mid
+                for m in members
+                if m.order_receipt
+                for mid in merchant_by_receipt.get(m.order_receipt, [])
+            )
+        )
+        out.append(
+            results.CandidateBatch(
+                settlement_id=settlement_id,
+                settlement_utr=utr,
+                bank_row_id="",
+                delta_paise=0,
+                member_row_ids=tuple(m.row_id for m in members),
+                merchant_row_ids=merchant_ids,
+                settled_at_utc=next((m.settled_at_utc for m in members if m.settled_at_utc), None),
+            )
+        )
+    return out
+
+
+def _withdraw_superseded(
+    exceptions: list[results.ReconException], groups: list[results.MatchGroup]
+) -> list[results.ReconException]:
+    """Remove matched records from exceptions, dropping any exception left empty.
+
+    Keeping both would put a record in a group and an exception at once, which the partition
+    invariant forbids for a good reason: counted twice, it can mask an equal number of records
+    lost elsewhere and the totals still reconcile.
+    """
+    matched = {row_id for group in groups for row_id in group.record_ids}
+    if not matched:
+        return exceptions
+
+    kept: list[results.ReconException] = []
+    for exception in exceptions:
+        remaining = tuple(r for r in exception.record_ids if r not in matched)
+        if not remaining:
+            continue
+        if len(remaining) == len(exception.record_ids):
+            kept.append(exception)
+            continue
+        kept.append(
+            dataclasses.replace(
+                exception,
+                record_ids=remaining,
+                detail=exception.detail
+                + f" [narrowed: {len(exception.record_ids) - len(remaining)} of its records "
+                "were resolved by a later layer]",
+            )
+        )
+    return kept
+
+
 def evaluate(
     dataset_name: str, *, db_path: Path | None = None, max_layer: int = max(BUILT_LAYERS)
 ) -> Metrics:
@@ -225,11 +319,51 @@ def evaluate(
             )
         )
 
+    proposer = None
+    report = None
+    if max_layer >= adjudicate.LAYER:
+        rules_path = Path(os.environ.get("FINCTL_RULES_CACHE", "fixtures/rules_cache.json"))
+        rules = RulesCache.load(rules_path)
+        proposer = llm.build_proposer()
+
+        # Layer 4 receives the settlements Layer 1 could not link to a credit -- the
+        # MISSING_BANK_ROW population -- plus every exception raised so far, for job 3.
+        unlinked = [
+            c
+            for c in _unlinked_batches(data, result)
+        ]
+        fourth, report, _explanations = adjudicate.resolve(
+            data, unlinked, list(result.exceptions), proposer=proposer, rules=rules
+        )
+        result.merge(fourth)
+        # A later layer resolving a record supersedes any earlier verdict about it. Narrow
+        # rather than drop: an exception naming five records of which one is now matched still
+        # has something true to say about the other four, and deleting it would lose that.
+        # Generalised deliberately -- the first version withdrew only MISSING_BANK_ROW and left
+        # MISSING_GATEWAY_ROW behind for the same credits, which the disjointness check caught.
+        result.exceptions = _withdraw_superseded(result.exceptions, result.groups)
+        rules.save(rules_path)
+
     absorb_unresolved(data, result)
     elapsed_us = int((time.perf_counter() - started) * 1_000_000)
 
     truth = load_ground_truth(paths["labels"])
     metrics = _score(dataset_name, provenance, data.record_count, elapsed_us, result, truth)
+
+    if proposer is not None:
+        metrics.llm_calls = proposer.stats.calls
+        metrics.llm_cache_hits = proposer.stats.cache_hits
+        metrics.llm_calls_by_kind = dict(proposer.stats.calls_by_schema)
+        metrics.llm_mode = proposer.mode
+        metrics.llm_stubbed = proposer.stats.is_stubbed
+        metrics.cost_micros_usd = proposer.stats.cost_micros_usd
+    if report is not None:
+        metrics.adjudication = report
+        rules_now = RulesCache.load(
+            Path(os.environ.get("FINCTL_RULES_CACHE", "fixtures/rules_cache.json"))
+        )
+        metrics.rules_total = len(rules_now)
+        metrics.rules_promoted = len(rules_now.promoted)
 
     ledger = _write_ledger(result, db_path)
     metrics.ledger_entries = len(ledger)
@@ -499,8 +633,20 @@ def render(metrics: Metrics) -> str:
         + ", ".join(f"{k} {v}" for k, v in sorted(metrics.by_type.items(), key=lambda kv: -kv[1])),
         "  by class: "
         + (", ".join(f"{k} {v}" for k, v in sorted(metrics.by_class.items())) or "none"),
-        f"LLM calls          {metrics.llm_calls:>10}          "
-        f"Calls / 100  {_percent(metrics.llm_calls, metrics.n, 1)}",
+        f"LLM calls          {metrics.llm_calls:>10}   "
+        f"cache hits {metrics.llm_cache_hits:>4}   "
+        f"Calls / 100  {(100 * metrics.llm_calls / metrics.n) if metrics.n else 0:.2f}",
+        "  by kind: "
+        + (
+            ", ".join(f"{k} {v}" for k, v in sorted(metrics.llm_calls_by_kind.items()))
+            or "none (all replayed from fixtures)"
+        )
+        + (
+            f"   MODE={metrics.llm_mode}"
+            + ("  !! STUBBED PROPOSER, not a model" if metrics.llm_stubbed else "")
+        ),
+        f"Rules cache        {metrics.rules_total:>10} rules   {metrics.rules_promoted} promoted "
+        f"from narration the seeded regex missed",
         f"Cost / 1000        {'Rs TBD':>10}          "
         f"USD {metrics.cost_micros_usd / 1_000_000:.6f} total",
         f"Audit ledger       {metrics.ledger_entries:>10} entries   head {metrics.ledger_head[:12]}",
@@ -565,7 +711,12 @@ def render(metrics: Metrics) -> str:
     return "\n".join(lines)
 
 
-ABLATION_ARMS = ((1, "exact only (L1)"), (2, "+ netting (L2)"), (3, "+ fuzzy (L3)"))
+ABLATION_ARMS = (
+    (1, "exact only (L1)"),
+    (2, "+ netting (L2)"),
+    (3, "+ fuzzy (L3)"),
+    (4, "+ LLM (L4)"),
+)
 
 
 def render_ablation(dataset_name: str) -> str:

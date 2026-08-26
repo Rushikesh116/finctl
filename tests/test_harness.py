@@ -199,7 +199,13 @@ def test_the_block_carries_provenance_and_the_overlap_caveat() -> None:
     assert "SHA:" in rendered, "no git SHA in the header"
     assert "OVERLAP and do not sum to" in rendered, "per-pathology overlap caveat missing"
     assert "precision, not coverage" in rendered
-    assert "not built yet" in rendered, "absent layers must be named, not omitted"
+    # All four layers exist as of Phase 5, so the "not built yet" marker is gone. What must
+    # still be impossible to miss is that the proposer is a stub rather than a model.
+    metrics = harness.evaluate(DEV)
+    if metrics.llm_stubbed:
+        assert "STUBBED PROPOSER" in rendered, (
+            "the block reported LLM figures without disclosing that a stub produced them"
+        )
 
 
 def test_the_ledger_chain_is_verified_on_every_run() -> None:

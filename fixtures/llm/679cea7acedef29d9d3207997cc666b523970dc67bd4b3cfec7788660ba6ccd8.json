@@ -1,0 +1,14 @@
+{
+  "model": "claude-opus-5",
+  "response": {
+    "confidence": 50,
+    "suggested_resolution": "Review the evidence recorded on this exception and decide manually.",
+    "summary": "Could not match: missing bank row."
+  },
+  "schema": "exception_explanation",
+  "source": "offline_stub",
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

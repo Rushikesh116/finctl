@@ -29,11 +29,12 @@ bank_share     = 0.20
 
 
 [settlement]
-# 30 batches over ~250 gateway rows, averaging ~8 rows each. The count is not arbitrary:
-# the per-mechanism min_instances floors below sum to 12, and 12/30 = 0.40, which lands the
-# generator on its fraction target while keeping clear air above the 0.30 assertion floor.
-# At 26 batches the floors alone would force 0.46 and contradict the stated target.
-target_batches = 30
+# 35 batches. The count is not arbitrary: the per-mechanism min_instances floors below sum to
+# 14, and 14/35 = 0.40, which lands the generator on its fraction target while keeping clear
+# air above the 0.30 assertion floor. It was 30 with floors summing to 12 (also 0.40) until
+# Phase 5 raised M3's floor to 4 for narration formats; the batch count moved with it to keep
+# the arithmetic consistent, which the config test checks.
+target_batches = 35
 batch_size_min = 3
 batch_size_max = 12
 
@@ -76,7 +77,7 @@ gst_percent = 18
 # M6 instances means Phase 6's single shot reports an untested bound, and the
 # SUBSET_SEARCH_EXHAUSTED column would be empty with nothing to say why.
 #
-# Floors sum to 12 against target_batches = 30. tests/test_generator.py asserts both the
+# Floors sum to 12 against target_batches = 35. tests/test_generator.py asserts both the
 # sum-vs-target consistency and each floor, per dataset.
 # ---------------------------------------------------------------------------------------
 
@@ -104,16 +105,25 @@ release_lag_batches_max = 3
 
 [mechanism.credit_without_parseable_utr]
 weight = 0.15
-min_instances = 2
+# Raised from 2 in Phase 5: with only two instances there were only two narration formats, and
+# a regex-promotion curve over two points demonstrates the mechanism without exercising it.
+# Four gives one seeded-format credit, two formats that must be learned, and one with no
+# reference anywhere -- which is also what makes the MISSING_BANK_ROW / UNPARSEABLE_NARRATION
+# split testable.
+min_instances = 4
 # No extractable reference in the narration, so there is no join at all and δ is the entire
 # credit. Resolved first by matching complete batch totals — a cheap scalar match over ~26
 # candidates — and only then by row-level search. Narration formats are unspecifiable by
 # nature (Q-012), which is exactly why Layer 4 learns regexes instead of shipping them.
-narration_templates = [
-    "NEFT-{sender}-UTR{utr}-{suffix}",       # parseable: the regex path
-    "NEFT CR-{sender}-{suffix}",             # no UTR at all
-    "IMPS/{suffix}/SETTLEMENT",              # no UTR at all
-    "RTGS {sender} {utr_truncated}",         # truncated: looks parseable, is not
+# Four formats, in a fixed order so each batch's format is deterministic:
+#   0  the shape the rules cache ships knowing -- no LLM call needed
+#   1  and 2  carry the UTR in shapes the seeded regex misses -- these are the promotion path
+#   3  carries no reference anywhere -- this is UNPARSEABLE_NARRATION, not MISSING_BANK_ROW
+narration_formats = [
+    "NEFT-RAZORPAYSOFTWARE-UTR{utr}-STL",
+    "IMPS/{utr}/RAZORPAY SOFTWARE",
+    "RTGS CR REF {utr} RAZORPAY",
+    "NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT",
 ]
 
 [mechanism.duplicate_reference_contamination]

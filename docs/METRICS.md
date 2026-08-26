@@ -7,6 +7,122 @@ output. A result that has not been run is `TBD`. See
 
 ---
 
+## Phase 5 — Layer 4 (adjudication behind the verifier)
+
+> **Every LLM figure below came from a stub, not a model.** There is no `ANTHROPIC_API_KEY` and
+> no `ant` credential in the environment this was built in, so the live SDK path is written and
+> unit-tested but **has never been executed against the API**. Fixtures are tagged
+> `"source": "offline_stub"` and the block prints `!! STUBBED PROPOSER, not a model`. What that
+> leaves intact is the regex-promotion machinery and the verifier boundary, both of which are
+> real code; what it leaves unverified is whether a real model proposes usable regexes at a
+> useful rate, and what it would cost. See `core/llm.py`.
+
+```
+$ git rev-parse --short HEAD
+5069d36
+$ date -u '+%Y-%m-%d %H:%M UTC'
+2026-08-26 17:39 UTC
+$ make eval
+Dataset: dev_seed_11  data 1115450f   SHA: 5069d36   2026-08-26 17:39
+Records processed         558          Wall clock    0.267s
+Auto-matched              425    76.2%   Throughput   2090 rec/s
+  Layer 1  exact            325    58.2%
+  Layer 2  netting           73    13.1%
+  Layer 3  fuzzy              0     0.0%
+  Layer 4  LLM+verified      27     4.8%
+False matches               0    0.00%   <- precision, not coverage
+Exceptions                133    23.8%    Rs 1,14,61,299.74 at risk
+  correctly flagged        94    70.7%
+  missed matches           39    29.3%
+  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
+  by class: absent 56, undetermined 38
+LLM calls                   0   cache hits    6   Calls / 100  0.00
+  by kind: none (all replayed from fixtures)   MODE=offline  !! STUBBED PROPOSER, not a model
+Rules cache                 3 rules   2 promoted from narration the seeded regex missed
+Cost / 1000            Rs TBD          USD 0.000000 total
+Audit ledger               42 entries   head e51023c30206
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0
+  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0
+Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.
+  P7 record-level tie            8/8    records   100.0%
+  M5 batch subset ambiguity      2/2    batches   100.0%
+By pathology  (records carry >=1, so these OVERLAP and do not sum to 558)
+  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24
+  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14
+
+Ablation (same dataset, layers enabled cumulatively)
+  arm                  auto-match   false-match   exceptions   UNCLASSIFIED
+  exact only (L1)          58.2%         0.00%          233             94
+  + netting (L2)           71.3%         0.00%          160              4   +13.1pp
+  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp
+  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp
+  False-match rate is reported on every arm: an arm that raises coverage while also
+  raising false matches is a regression being sold as an improvement.
+
+$ make llm-curve
+Curve A - the regex cache, isolated
+  fixtures cleared before every run, rules cache kept. Nothing is replayed, so a falling call count is a narration shape a promoted regex now handles.
+
+  run   calls   per 100   PARSE   explain   cache hits   promoted rules
+    1       8      1.43       3         5            0                2
+    2       6      1.08       1         5            0                2
+    3       6      1.08       1         5            0                2
+    4       6      1.08       1         5            0                2
+
+Curve B - the fixture cache
+  nothing cleared. Calls fall because responses replay by prompt hash. This would fall to zero even with no regex ever promoted, which is why A is reported too.
+
+  run   calls   per 100   PARSE   explain   cache hits   promoted rules
+    1       8      1.43       3         5            0                2
+    2       0      0.00       0         0            6                2
+    3       0      0.00       0         0            6                2
+    4       0      0.00       0         0            6                2
+
+PARSE calls: 3 -> 1 over 4 runs, with 2 regexes promoted. Nothing was replayed, so that is the regex cache.
+EXPLAIN calls hold at 5: one per distinct exception type, not a narration shape, so no regex can retire them. They fall only in curve B, via the fixture cache.
+```
+
+### The falling curve
+
+**Parse calls 3 → 1 with two regexes promoted, and nothing replayed.** Curve A clears the fixture
+cache before every run while keeping the rules cache, so the drop cannot be replay — it is two
+narration shapes that a promoted regex now handles deterministically. The remaining call is the
+narration containing no reference at all: no regex can ever retire it, so it costs a call every
+run, permanently and correctly.
+
+**Explanation calls hold at 5** — one per distinct exception type. They are not a narration shape,
+so no regex can retire them; they fall only in curve B, via the fixture cache. Reporting a single
+combined "calls per run" number would have shown 8 → 6 and hidden which cache did the work.
+
+**Calls per 100 records: 1.43 cold, 0.00 on replay.** The brief's target was under 5% of the
+batch reaching the LLM; this is 0.54% of records cold.
+
+### What Layer 4 bought
+
+| | before (+L3) | after (+L4) | delta |
+|---|---|---|---|
+| auto-match rate | 66.3%* | **76.2%** | **+9.9pp** |
+| **false-match rate** | **0.00%** | **0.00%** | **+0.00pp** |
+| exception records | 162* | 133 | −29 |
+| `MISSING_BANK_ROW` | 40* | 32 | split |
+| `UNPARSEABLE_NARRATION` | 0 | **32** | new |
+
+\* the before column is from the previous dataset SHA; the current-SHA arms are in the ablation
+table inside the block above, which is the comparison that counts.
+
+**The split is the item-2 deliverable and it is now real.** Layer 1 cannot distinguish "no credit
+exists" from "a credit exists whose reference is unreadable" — both look identical to an exact
+join. Three of the four blank-reference credits had their UTR recovered from narration; the
+fourth carries no reference anywhere and is now typed `UNPARSEABLE_NARRATION`, which tells an
+operator to read the line rather than chase the feed.
+
+---
+
 ## Phase 4 — Layer 3 (fuzzy matching and global assignment)
 
 ```
@@ -356,7 +472,7 @@ It is not comparable to them, however similar the numbers look.
 | 2 — exact only (L1) | `dev_seed_11` | `d93197db` | 50.3% | 0.00% | 239 | `6244f91` | 2026-08-26 |
 | 3 — + netting (L2) | `dev_seed_11` | `d93197db` | 66.3% | 0.00% | 162 | `6244f91` | 2026-08-26 |
 | 4 — + fuzzy (L3) | `dev_seed_11` | `d93197db` | 66.3% | 0.00% | 162 | `1e9e225` | 2026-08-26 |
-| 5 — + LLM (L4) | `dev_seed_11` | TBD | TBD | TBD | TBD | TBD | TBD |
+| 5 — + LLM (L4) | `dev_seed_11` | `1115450f` | 76.2% | 0.00% | 133 | `5069d36` | 2026-08-26 |
 | 6 (final, once) | `holdout_seed_97` | TBD | TBD | TBD | TBD | TBD | TBD |
 
 Both current rows are **real runs on the same data**, produced by the ablation arms rather than

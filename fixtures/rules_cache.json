@@ -1,0 +1,17 @@
+[
+  {
+    "name": "seed_neft_utr",
+    "pattern": "UTR([A-Za-z0-9]{8,})",
+    "promoted_from": null
+  },
+  {
+    "name": "promoted_1",
+    "pattern": "IMPS/([A-Za-z0-9]{8,40})/RAZ",
+    "promoted_from": "IMPS/1888481283mjoasu/RAZORPAY SOFTWARE"
+  },
+  {
+    "name": "promoted_2",
+    "pattern": "RTGS\\ CR\\ REF\\ ([A-Za-z0-9]{8,40})\\ RAZ",
+    "promoted_from": "RTGS CR REF 1552002271luumnm RAZORPAY"
+  }
+]

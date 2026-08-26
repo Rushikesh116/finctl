@@ -163,6 +163,9 @@ class _Generator:
         self.settlement_labels: list[SettlementLabel] = []
 
         self._counters: dict[str, int] = defaultdict(int)
+        # Cycles M3 through the narration formats deterministically, so every
+        # dataset contains each shape rather than depending on a lucky draw.
+        self._m3_seen = 0
 
     # -- identifiers ---------------------------------------------------------------------
 
@@ -576,10 +579,16 @@ class _Generator:
 
         reference, narration = utr, f"NEFT-RAZORPAYSOFTWARE-UTR{utr}-STL"
         if mechanism == "credit_without_parseable_utr":
+            # The `reference` column is blank, so Layer 1's exact join finds nothing. The UTR is
+            # still recoverable from the narration in three of the four formats -- which is the
+            # whole point: regex first, LLM only on a shape regex missed, then promote a regex so
+            # the shape is free ever after. The fourth carries no reference at all, and telling
+            # that apart from a genuinely absent credit is the MISSING_BANK_ROW /
+            # UNPARSEABLE_NARRATION split.
+            formats = self.cfg["mechanism"][mechanism]["narration_formats"]
             reference = ""
-            narration = self.rng.choice(
-                ["NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT", "IMPS/SETTLEMENT/CR", "RTGS CREDIT"]
-            )
+            narration = formats[self._m3_seen % len(formats)].format(utr=utr)
+            self._m3_seen += 1
 
 
         bank_row = None

@@ -239,3 +239,51 @@ states inspected.
 Per D-0001: `python:3.13-slim` rather than `python:3.11-slim`, matching the local
 interpreter so there is no dev/prod skew. This is a knowing deviation from the brief's
 literal text, and the Dockerfile in Phase 6 will carry a comment saying so.
+
+---
+
+# Out of scope — logged, not built
+
+Phase 5's scope was fixed at three items: narration parsing with the regex-promotion cache, the
+`MISSING_BANK_ROW` / `UNPARSEABLE_NARRATION` split, and the LLM-drafted explanation on each
+exception. Phases 6 and 7 — deploy, report, the single holdout evaluation, README, video — are
+what remain and are what a judge actually sees.
+
+Each of the following looked tempting while building Layer 4 and was **not built**. Logged so the
+decision is visible rather than rediscovered.
+
+### O-001 — LLM-assisted subset search for exhausted batches
+
+`SUBSET_SEARCH_EXHAUSTED` batches could be handed to the model with the pool and δ, asking it to
+propose a subset. The verifier would re-check the arithmetic, so a wrong proposal is harmless.
+**Not built:** it puts the model on the critical path of a *money* decision rather than a parsing
+one, and the honest exhausted verdict is more valuable to an operator than a guess that happens
+to verify. Also unbounded in cost — a large pool means a large prompt every run, with no regex to
+retire it.
+
+### O-002 — LLM disambiguation of `AMBIGUOUS` refusals
+
+Asking the model which of two interchangeable candidates is correct. **Not built, and it should
+not be:** pathology 7 is constructed so that *nothing in the data* discriminates. A model asked
+to choose would produce a confident answer from no evidence, which is precisely the failure the
+refusal exists to avoid. The verifier could not catch it either, because both candidates satisfy
+the arithmetic. This is the one place where adding the model would make the system worse.
+
+### O-003 — Learned amount tolerance for near-miss pairings
+
+Letting the model suggest a tolerance where amounts nearly agree, e.g. a rounding difference.
+**Not built:** it would move the false-match risk out of attribution and into arithmetic, which
+D-0024 exists to prevent. A group whose money does not balance must remain impossible.
+
+### O-004 — Promoting regexes for the merchant `order_ref` format
+
+The same promotion machinery would work on ledger references. **Not built:** no dataset shape
+needs it, so it would be capability without a test — and an untested capability in a submission
+graded on measured accuracy is a liability, not a feature.
+
+### O-005 — Per-exception explanations rather than per-type
+
+Explanations are drafted once per distinct exception *type*, not per exception object. Per-object
+wording would be more specific and would multiply calls by roughly 10x for text that is largely
+identical. **Not built:** the specificity belongs in the evidence already attached to each
+exception, which is exact, rather than in prose.
