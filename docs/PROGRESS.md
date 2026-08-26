@@ -56,11 +56,18 @@ commit.
 
 The most important phase: if the generator is wrong, every metric downstream is a lie.
 
-**Gate evidence.** `110 passed, 0 skipped`. Both datasets generated in four separate `make
+**Gate evidence.** `112 passed, 0 skipped`. Both datasets generated in four separate `make
 seed` processes under `PYTHONHASHSEED` 0, 12345, and `random` twice — all eight files
 byte-identical by `cmp`, not merely hash-equal. Verified the check has power with a negative
 control: injecting a `set`-iteration order leak into the merchant emission made the hashes
 diverge per seed (`0dbf72be…` vs `ae09a8df…`), and removing it restored `052824af…`.
+
+**Amended after the gate** (D-0016): `Label.pathology` became `pathologies: list[int]`. The
+manifest guard caught the change immediately and identified it precisely — only the two
+labels files moved, all six record files byte-unchanged — so the amendment is a relabelling,
+not a perturbation of the data. Determinism re-verified across all four processes afterwards.
+41% of records now carry more than one pathology; `Σ per-pathology counts` is 704 against
+`N = 477`, overlapping by design.
 
 | Measure | dev_seed_11 | holdout_seed_97 |
 |---|---|---|

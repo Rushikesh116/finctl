@@ -322,3 +322,50 @@ construction.
 **Why it matters.** Collapsed into one bucket, the queue tells an operator to go hunting for a
 bank row that is sitting right in front of them — and the two resolutions have different
 costs and different owners. *2026-08-26*
+
+---
+
+## D-0016 — `Label.pathologies` is a sorted list, not a single `pathology`
+
+**Amends `SPEC.md` after its Phase 1 freeze.** Recorded here as the freeze protocol requires.
+
+**Context.** A record can exhibit several pathologies at once. A batch that settles late over
+a bank holiday (pathology 9) *and* has rows stranded by the export cutoff (mechanism M1,
+pathology 1) produces records that are genuinely both. The original single-valued
+`pathology: int` made these compete, and the winner was whichever branch happened to be
+evaluated first.
+
+Found by spot-check, not by a test: `gw_000149` was labelled `pathology=9` when it is equally
+a pathology-1 netting member.
+
+**Decision.** `Label.pathologies: list[int]` — sorted, non-empty, no duplicates, validated in
+`__post_init__`. The generator **unions** rather than overrides: every batch contributes
+pathology 1 (a batch *is* a netting case by definition), a late batch adds 9, a δ mechanism
+adds whatever it exhibits, and row-level properties add 3, 6 or 12.
+
+**Why this was worth amending a frozen document.** First-past-the-post attribution does not
+fail loudly, and it mis-assigns *precisely the records that are most diagnostic*. Every
+pathology still cleared its floor of 2 in both datasets, so **no test failed and no gate was
+missed** — the loss was invisible to the whole suite. Left in place, the first per-pathology
+accuracy table in the ablation would have quietly under-reported every overlapping case, and
+the natural reading of that table ("Layer 2 handles pathology 9 badly") would have been an
+artefact of labelling rather than a fact about the matcher.
+
+The cost of fixing it later is what settles it: once the harness reads these labels and
+metrics are recorded against them, changing the shape invalidates every recorded number.
+Cheap now, expensive after Phase 2.
+
+**`SettlementLabel.mechanism` stays singular.** It was checked for the same defect and does
+not have it: the generator's plan holds one entry per batch slot, so a batch draws exactly one
+mechanism and there is nothing to drop. A list that can only ever hold one element is
+speculative generality, not safety. If a batch ever draws two, that becomes a list with its
+own entry here.
+
+**Consequence for the metrics.** Per-pathology counts now **overlap and do not sum to N**.
+That is stated in `eval-protocol` §4 *and printed in the metrics block itself*, because a
+reader who sees per-pathology numbers exceeding the total will otherwise read it as an
+inconsistency in the measurement rather than as a property of the labelling.
+
+Guarded by `test_at_least_one_record_carries_more_than_one_pathology`, which asserts overlap
+*exists* — so a future "simplification" back to an override fails instead of silently
+reverting. *2026-08-26*

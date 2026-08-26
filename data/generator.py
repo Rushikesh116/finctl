@@ -23,6 +23,7 @@ import random
 import sys
 import tomllib
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -279,7 +280,7 @@ class _Generator:
         self,
         row_id: str,
         source: str,
-        pathology: int,
+        pathologies: Sequence[int],
         *,
         group: str | None = None,
         reason: str | None = None,
@@ -288,7 +289,7 @@ class _Generator:
             Label(
                 row_id=row_id,
                 source=source,  # type: ignore[arg-type]
-                pathology=pathology,
+                pathologies=sorted(set(pathologies)),
                 true_group_id=None if reason else group,
                 unmatchable=bool(reason),
                 reason_code=reason,
@@ -402,9 +403,20 @@ class _Generator:
         settle_day = self._add_working_days(capture_day, 5 if is_late else self.cycle_days)
         settled_at = _ist_epoch(settle_day, 18, 0)
 
-        # Resolved BEFORE any row is built, because each row captures the batch pathology at
+        # Resolved BEFORE any row is built, because each row captures the batch pathologies at
         # construction time. Deciding it later left pathology 8 labelled as 1.
-        pathology = MECHANISM_PATHOLOGY.get(mechanism or "", 9 if is_late else 1)
+        #
+        # A **union**, not an override. Every batch is a netting case (pathology 1) by
+        # definition; a late-settling batch is *also* pathology 9; a batch with a δ mechanism
+        # is *also* whatever that mechanism exhibits. The previous single-valued version made
+        # these compete, so a batch that was both M1 and late reported only one of the two
+        # — and the doubly-affected batches are the diagnostic ones (D-0016).
+        pathology = [1]
+        if is_late:
+            pathology.append(9)
+        if mechanism in MECHANISM_PATHOLOGY:
+            pathology.append(MECHANISM_PATHOLOGY[mechanism])
+        pathology = sorted(set(pathology))
 
         utr = shared_utr or self._utr()
         has_credit = mechanism != "missing_bank_row"
@@ -431,7 +443,7 @@ class _Generator:
                             settlement_utr=utr,
                             settled_at_utc=settled_at,
                         ),
-                        3,
+                        pathology + [3],
                     )
                 )
                 continue
@@ -448,7 +460,7 @@ class _Generator:
                             settlement_utr=utr,
                             settled_at_utc=settled_at,
                         ),
-                        6,
+                        pathology + [6],
                     )
                 )
                 continue
@@ -468,7 +480,7 @@ class _Generator:
                             settled_at_utc=settled_at,
                             fx=(currency, original, fx_rates[currency]),
                         ),
-                        12,
+                        pathology + [12],
                     )
                 )
                 continue
@@ -660,7 +672,7 @@ class _Generator:
                     order_id=parent.order_id,
                 )
             )
-            self._label(refund.row_id, "gateway", 4, reason=REASON_REFUND_LATER_CYCLE)
+            self._label(refund.row_id, "gateway", [4], reason=REASON_REFUND_LATER_CYCLE)
 
         # Pathology 5: both dispute legs are type="adjustment" sharing a dispute_id, debit
         # then credit. There is no `chargeback` value in the recon enum (SPEC §5.1).
@@ -685,7 +697,7 @@ class _Generator:
                         dispute_id=dispute_id,
                     )
                 )
-                self._label(leg.row_id, "gateway", 5, reason=REASON_DISPUTE_LEG_UNSETTLED)
+                self._label(leg.row_id, "gateway", [5], reason=REASON_DISPUTE_LEG_UNSETTLED)
 
         # Pathology 7: two customers, same amount, same day, no distinguishing key. The demo
         # centrepiece — a correct system declines and explains, it does not pick.
@@ -705,7 +717,7 @@ class _Generator:
                     customer_ref=None,
                 )
                 self.merchant.append(twin)
-                self._label(twin.row_id, "merchant", 7, reason=REASON_AMBIGUOUS_NO_KEY)
+                self._label(twin.row_id, "merchant", [7], reason=REASON_AMBIGUOUS_NO_KEY)
 
         # Pathology 11: adjustment with dispute_id, order_id and payment_id ALL null.
         # dispute_id is the single field separating this from pathology 5 (SPEC §5.1).
@@ -724,7 +736,7 @@ class _Generator:
                     settled=False,
                 )
             )
-            self._label(orphan.row_id, "gateway", 11, reason=REASON_ADJUSTMENT_NO_REF)
+            self._label(orphan.row_id, "gateway", [11], reason=REASON_ADJUSTMENT_NO_REF)
 
 
 def generate_dataset(name: str) -> GeneratedDataset:

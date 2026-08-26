@@ -2,6 +2,12 @@
 
 > ## FROZEN — 2026-08-26, at the Phase 1 gate
 >
+> **Amendments since the freeze**, each with a `DECISIONS.md` entry as the protocol requires:
+>
+> | Date | Change | Entry |
+> |---|---|---|
+> | 2026-08-26 | `Label.pathology: int` → `Label.pathologies: list[int]` (§3.7). Single-valued attribution silently mis-assigned doubly-affected records without failing any test | D-0016 |
+>
 > **Changing anything in this document now requires an entry in `DECISIONS.md` explaining why,
 > and explicit approval** (`CLAUDE.md` → "Stop and ask before"). Everything downstream — the
 > generator, the matcher, the harness, the metrics — is written against these definitions, so
@@ -161,13 +167,33 @@ re-derived, because re-deriving with a float is how an FX line drifts.
 |---|---|---|
 | `row_id` | `str` | |
 | `source` | `"merchant" \| "gateway" \| "bank"` | |
+| `pathologies` | `list[int]` | **a list**, sorted, non-empty, no duplicates, values 1–12 — see below |
 | `true_group_id` | `str \| None` | records sharing a group describe the same money movement |
 | `unmatchable` | `bool` | |
 | `reason_code` | `str \| None` | required when `unmatchable`; must be registered in `core.records.REASON_CLASS` |
 | *`unmatchable_class`* | `"absent" \| "undetermined"` | **derived** from `reason_code`, never stored — see below |
-| `pathology` | `int` | 1–12, so per-pathology accuracy is reportable |
 
 Every record has exactly one label. There is no third state.
+
+**`pathologies` is a list, and it is a union rather than a choice** (D-0016). A record can
+genuinely be several things at once: a member of a batch that settled late over a bank holiday
+is `[1, 9]`, and a row inside an on-hold-release batch that also carries a half-paisa fee is
+`[1, 6, 10]`. Construction is additive — every batch member gets pathology 1 because a batch
+*is* a netting case, a late batch adds 9, a δ mechanism adds what it exhibits, and row-level
+properties add 3, 6 or 12.
+
+Single-valued attribution made these compete, and lost the second label without failing any
+test — every pathology still cleared its floor, so the whole suite stayed green while the
+doubly-affected records, the most diagnostic ones in the dataset, were mislabelled.
+
+Two consequences:
+
+- Floor assertions read "appears in at least **2 records' lists**", which preserves the
+  original behaviour.
+- **Per-pathology rates overlap and do not sum to the overall rate.** A `[1, 9]` record counts
+  toward both denominators. This is stated in the metrics block itself, not only here, because
+  a reader who sees per-pathology counts exceeding `Records processed` will otherwise take it
+  for an inconsistency in the measurement.
 
 **Two kinds of unmatchable, and the exception queue must say different things about them:**
 

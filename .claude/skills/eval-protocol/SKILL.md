@@ -115,6 +115,18 @@ actually lets through.
 An exception that ground truth says *was* matchable is a **missed match** (false
 negative), not a correctly-flagged one. So `exceptions = correctly_flagged + missed_matches`.
 
+**Per-pathology rates overlap and do not sum to the overall rate.** A record carries
+`pathologies: list[int]` (`SPEC.md` §3.7, D-0016), because a record can genuinely be several
+things at once — a batch member that also settled late is `[1, 9]`. Such a record counts
+toward the denominator of **both** pathology 1 and pathology 9.
+
+So `Σ per-pathology counts > N`, always, and that is correct rather than a bookkeeping error.
+Each per-pathology rate is `records exhibiting that pathology and resolved correctly` over
+`records exhibiting that pathology` — a self-contained ratio, not a share of the whole. The
+metrics block prints this caveat on the same line as the numbers, because a reader who spots
+per-pathology counts exceeding the total will otherwise take it for an inconsistency in the
+measurement.
+
 **Rupees at risk** — the summed amount of exception records, counting each distinct money
 movement **once**. Where one exception spans records in several sources describing the same
 movement, the gateway amount is authoritative. Summing all three sources triple-counts and
@@ -137,7 +149,15 @@ False matches              2   0.42%   <- precision, not coverage
 Exceptions                34    6.6%   Rs 1,84,220 at risk
   correctly flagged       31   91.2%
   by type: AMBIGUOUS 9, MISSING_BANK_ROW 7, UNEXPLAINED_ADJ 6, ...
+  by class: absent 22, undetermined 9
+By pathology  (records carry >=1, so these OVERLAP and do not sum to 512)
+  P1 267/267  P2  34/36   P3  16/16   P4   1/3    P5   4/4    P6  20/20
+  P7  39/44   P8  16/16   P9  30/33   P10 31/35   P11  2/2    P12 12/12
 ```
+
+The `by pathology` header carries its own caveat because that is where it gets read. A record
+labelled `[1, 9]` counts under both, so the column totals exceed `Records processed` — correct
+by construction, and misread as a bug the moment the caveat lives only in a document.
 
 **Those numbers are illustrative placeholders from the brief, not results.** They are
 reproduced here only to pin the *format*. Whatever a real run prints is what ships.

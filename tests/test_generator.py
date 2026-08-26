@@ -474,10 +474,13 @@ def test_both_datasets_contain_every_pathology_at_least_twice(dataset_name: str)
     dataset = generate_dataset(dataset_name)
     counts: dict[int, int] = defaultdict(int)
     for label in dataset.labels:
-        counts[label.pathology] += 1
+        for pathology in label.pathologies:
+            counts[pathology] += 1
 
     thin = {p: counts.get(p, 0) for p in range(1, PATHOLOGY_COUNT + 1) if counts.get(p, 0) < 2}
-    assert not thin, f"{dataset_name}: pathologies appearing fewer than twice: {thin}"
+    assert not thin, (
+        f"{dataset_name}: pathologies appearing in fewer than 2 records' lists: {thin}"
+    )
 
 
 @generated
@@ -543,6 +546,35 @@ def test_m5_is_unmatchable_but_m6_is_not(dataset_name: str) -> None:
 
 @generated
 @pytest.mark.parametrize("dataset_name", DATASETS)
+def test_at_least_one_record_carries_more_than_one_pathology(dataset_name: str) -> None:
+    """Multi-pathology records must be guaranteed, not incidental.
+
+    A batch that is both late-settling (P9) and export-cutoff-skewed (M1 → P1) produces
+    records exhibiting both. Those doubly-affected records are the most diagnostic ones in the
+    dataset, and they are exactly what single-valued attribution used to drop silently — with
+    no test failing (D-0016). Now the *existence* of overlap is asserted, so the union
+    behaviour cannot regress back to an override without this failing.
+    """
+    from data.generator import generate_dataset
+
+    dataset = generate_dataset(dataset_name)
+    multi = [label for label in dataset.labels if len(label.pathologies) > 1]
+
+    assert multi, (
+        f"{dataset_name}: every record carries exactly one pathology, which means the union "
+        "has regressed to a first-past-the-post override (see D-0016)"
+    )
+
+    combinations = sorted({tuple(label.pathologies) for label in multi})
+    assert len(combinations) >= 2, (
+        f"{dataset_name}: only one multi-pathology combination present ({combinations}); "
+        "expected overlap from several sources — late settlement, δ mechanisms, and row-level "
+        "pathologies 3/6/12"
+    )
+
+
+@generated
+@pytest.mark.parametrize("dataset_name", DATASETS)
 def test_unmatchable_records_split_absent_from_undetermined(dataset_name: str) -> None:
     """Both classes must occur, because the exception queue says different things about them.
 
@@ -579,7 +611,8 @@ def test_the_two_unmatchable_classes_land_on_the_right_pathologies(dataset_name:
     by_pathology: dict[int, set[str | None]] = defaultdict(set)
     for label in dataset.labels:
         if label.unmatchable:
-            by_pathology[label.pathology].add(label.unmatchable_class)
+            for pathology in label.pathologies:
+                by_pathology[pathology].add(label.unmatchable_class)
 
     assert by_pathology[8] == {"absent"}, f"pathology 8 (feed gap): {by_pathology[8]}"
     assert by_pathology[11] == {"absent"}, f"pathology 11 (orphan adj): {by_pathology[11]}"
@@ -670,7 +703,7 @@ def test_absent_counterparts_have_no_group(dataset_name: str) -> None:
     from data.generator import generate_dataset
 
     dataset = generate_dataset(dataset_name)
-    pathology_8 = [label for label in dataset.labels if label.pathology == 8]
+    pathology_8 = [label for label in dataset.labels if 8 in label.pathologies]
     assert pathology_8, "pathology 8 absent"
 
     for label in pathology_8:

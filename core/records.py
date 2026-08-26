@@ -190,7 +190,11 @@ class Label:
 
     row_id: str
     source: Source
-    pathology: int
+    # A **list**, because a record can exhibit several pathologies at once and single-valued
+    # attribution silently drops all but the first. The doubly-affected records are the most
+    # diagnostic ones, so losing their second label is the worst possible thing to lose
+    # (D-0016). Sorted, non-empty, no duplicates.
+    pathologies: list[int]
     true_group_id: str | None = None
     unmatchable: bool = False
     reason_code: str | None = None
@@ -211,8 +215,18 @@ class Label:
                 f"{self.row_id}: matchable records need a true_group_id; a record whose "
                 "counterpart is absent should be unmatchable with a reason (SPEC §3.8)"
             )
-        if not 1 <= self.pathology <= 12:
-            raise ValueError(f"{self.row_id}: pathology {self.pathology} outside 1..12")
+        if not self.pathologies:
+            raise ValueError(f"{self.row_id}: pathologies must be non-empty")
+        if list(self.pathologies) != sorted(self.pathologies):
+            raise ValueError(
+                f"{self.row_id}: pathologies {self.pathologies} must be sorted, so the "
+                "serialised label is stable and comparable"
+            )
+        if len(set(self.pathologies)) != len(self.pathologies):
+            raise ValueError(f"{self.row_id}: duplicate entries in pathologies {self.pathologies}")
+        for pathology in self.pathologies:
+            if not 1 <= pathology <= 12:
+                raise ValueError(f"{self.row_id}: pathology {pathology} outside 1..12")
 
     @property
     def unmatchable_class(self) -> UnmatchableClass | None:
@@ -226,6 +240,13 @@ class SettlementLabel:
 
     `mechanism` is an attribution for scoring, not a hint: it lives in the labels file, so the
     matcher can never read which δ mechanism it is up against.
+
+    Singular, unlike `Label.pathologies`, and deliberately so: the generator's plan holds one
+    entry per batch slot, so a batch draws exactly one mechanism and there is nothing for a
+    first-past-the-post rule to drop. If that ever changes — a batch both skewed by the export
+    cutoff *and* carrying a duplicate reference — this becomes a list, with a `DECISIONS.md`
+    entry. A list that can only ever hold one element is speculative generality, not safety.
+    `bank_row_id is None` identifies a pathology-8 batch, which is why those carry no mechanism.
 
     `explaining_subsets` holds *every* subset of the pool that closes δ, which is what makes
     an M5 refusal checkable — an engine that finds 2 of 21 and refuses is right by accident.
