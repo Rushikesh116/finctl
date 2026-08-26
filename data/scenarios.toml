@@ -35,7 +35,7 @@ bank_share     = 0.20
 # At 26 batches the floors alone would force 0.46 and contradict the stated target.
 target_batches = 30
 batch_size_min = 3
-batch_size_max = 24
+batch_size_max = 12
 
 # THE DESIGN TARGET (docs/SPEC.md §4.1). Fraction of batches that must have δ ≠ 0 under the
 # trivial settlement_utr join. Asserted by

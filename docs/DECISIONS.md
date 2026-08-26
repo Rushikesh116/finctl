@@ -242,3 +242,83 @@ but no fetched document defines split-payment settlement semantics, so the datas
 teaching the matcher a shape invented for the occasion. Reported accuracy on invented data
 is worse than an acknowledged gap: the gap costs a sentence, the invention costs the
 credibility of every other number. *2026-08-26*
+
+---
+
+## D-0013 — Frozen dataclasses for records; pydantic reserved for the boundaries
+
+**Context.** The pinned stack lists both `dataclasses` and `pydantic` v2.
+
+**Decision.** Internal records (`core/records.py`) are frozen `slots=True` dataclasses with
+validation in `__post_init__`. Pydantic is reserved for the two places untrusted input
+crosses into the system: the LLM proposal schema (Phase 5) and the API response models
+(Phase 6).
+
+**Alternatives rejected.** *Pydantic everywhere* — validation on every construction of an
+object built hundreds of thousands of times per run, to guard data the generator produced
+itself. The boundaries are where validation earns its cost. *2026-08-26*
+
+---
+
+## D-0014 — M5 records are labelled unmatchable; M6 records are labelled matchable
+
+**Read this before changing either label. They look inconsistent and are not.**
+
+**Context.** Two mechanisms both end in an exception, and it is tempting to treat them the
+same way:
+
+- **M5** — several distinct subsets of the pool each close δ. The generator knows which pair
+  actually settled, but **the data as given does not determine it**.
+- **M6** — exactly one subset closes δ, but the pool is too large to find it inside the node
+  budget. The answer **is** determined; it is merely out of reach.
+
+**Decision.** M5's records are `unmatchable` (`ambiguous_subset_undetermined`), so refusing
+with `AMBIGUOUS` scores as **correctly flagged**. M6's records stay **matchable**, so
+`SUBSET_SEARCH_EXHAUSTED` scores as a **missed match** — an honest failure, not a success.
+
+**Why this must not be "simplified" into one rule.** If exhausting the budget also counted as
+a correct refusal, then **making the search worse would improve the headline number.** Lower
+the node budget, time out more often, and "correctly flagged" climbs while the engine
+reconciles strictly less. That is a metric that pays for weakness, and it would be invisible
+in the aggregate — the auto-match rate and the exception count would both look defensible.
+
+Put the other way: **giving up and declining are not the same claim.** "I could not determine
+this" is a finding the operator can act on. "I ran out of budget" is a limitation of the
+implementation. Reporting them as one number hides the more interesting one and removes the
+pressure to improve the search.
+
+**Alternatives rejected.**
+- *Label both unmatchable* — creates the perverse incentive above.
+- *Label both matchable* — scores the pathology-7 refusal, the demo centrepiece, as a miss,
+  and so penalises exactly the behaviour the brief asks for.
+- *A separate "declined" third state* — the partition `auto_matched + exceptions == N` is what
+  makes the metrics block checkable; a third state would need its own denominator and lose
+  that.
+
+Asserted in both directions by
+`tests/test_generator.py::test_m5_is_unmatchable_but_m6_is_not`, and written up in
+`SPEC.md` §4.3. *2026-08-26*
+
+---
+
+## D-0015 — Unmatchable reasons are classified `absent` or `undetermined`
+
+**Context.** "This record has no match" covers two situations that need different things said
+about them, and the exception queue is where the difference is felt.
+
+**Decision.** Every reason code is registered in `core.records.REASON_CLASS` as exactly one of:
+
+- **`absent`** — no true partner exists in the data (pathologies 8 and 11, unsettled dispute
+  legs, refunds settling in a later cycle, pool distractors). The resolution is operational:
+  chase the missing feed, or accept a write-off. More data would fix it.
+- **`undetermined`** — a partner exists, but the data cannot identify which (pathology 7, M5).
+  The resolution is a human decision or a new distinguishing key. **More data will not help**,
+  because the rows are already all present and simply do not discriminate.
+
+The class is **derived** from `reason_code` through the registry rather than stored as a
+second field, so the two cannot drift apart, and an unregistered code fails loudly at `Label`
+construction.
+
+**Why it matters.** Collapsed into one bucket, the queue tells an operator to go hunting for a
+bank row that is sitting right in front of them — and the two resolutions have different
+costs and different owners. *2026-08-26*

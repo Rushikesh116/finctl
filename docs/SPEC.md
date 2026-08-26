@@ -1,13 +1,21 @@
 # FinCtl specification
 
-> **Status: DRAFT.** This document is **frozen at the end of Phase 1**. After that,
-> changing anything here requires an entry in `DECISIONS.md` explaining why, and explicit
-> approval (`CLAUDE.md` → "Stop and ask before").
+> ## FROZEN — 2026-08-26, at the Phase 1 gate
 >
-> Reviewed 2026-08-26. §4's identity form is settled (D-0011) and the scenario config format
-> is settled (D-0010). Three pathologies still rest on undocumented mechanics and are marked
-> inline: §5 pathologies 10, 11 and 12 (Q-006, Q-007, Q-010). Those are carried as **stated
-> assumptions**, named in the README, not as verified facts.
+> **Changing anything in this document now requires an entry in `DECISIONS.md` explaining why,
+> and explicit approval** (`CLAUDE.md` → "Stop and ask before"). Everything downstream — the
+> generator, the matcher, the harness, the metrics — is written against these definitions, so
+> an unrecorded change here silently invalidates every result computed before it.
+>
+> Settled during Phase 1 and recorded: the identity form (D-0011), the scenario config format
+> (D-0010), transfers out of scope (D-0012), records as dataclasses (D-0013), the
+> M5-unmatchable / M6-matchable asymmetry (D-0014), and the `absent` / `undetermined` split
+> (D-0015).
+>
+> **Still resting on undocumented gateway mechanics**, carried as *stated assumptions* that the
+> README must name rather than as verified facts: §5 pathologies 10, 11 and 12 (Q-006, Q-007,
+> Q-010), the netting identity itself (Q-005), the dispute reversal leg (Q-011), and the export
+> cutoff skew that drives most of δ (Q-014).
 >
 > **Scope:** `transfer` rows — Route split-payment legs — are **out of scope** (D-0012). The
 > generator emits none and the matcher does not pretend to handle them.
@@ -155,10 +163,27 @@ re-derived, because re-deriving with a float is how an FX line drifts.
 | `source` | `"merchant" \| "gateway" \| "bank"` | |
 | `true_group_id` | `str \| None` | records sharing a group describe the same money movement |
 | `unmatchable` | `bool` | |
-| `reason_code` | `str \| None` | required when `unmatchable` |
+| `reason_code` | `str \| None` | required when `unmatchable`; must be registered in `core.records.REASON_CLASS` |
+| *`unmatchable_class`* | `"absent" \| "undetermined"` | **derived** from `reason_code`, never stored — see below |
 | `pathology` | `int` | 1–12, so per-pathology accuracy is reportable |
 
 Every record has exactly one label. There is no third state.
+
+**Two kinds of unmatchable, and the exception queue must say different things about them:**
+
+| Class | Meaning | Resolution | Reason codes |
+|---|---|---|---|
+| `absent` | **No true partner exists** in the data | Operational — chase the missing feed, or accept a write-off. **More data would fix it** | `bank_row_absent`, `adjustment_without_reference`, `refund_settles_in_later_cycle`, `dispute_leg_unsettled`, `unassigned_pool_distractor` |
+| `undetermined` | **A partner exists, but the data cannot identify which** | A human decision, or a new distinguishing key. **More data will not help** — the rows are all present and simply do not discriminate | `ambiguous_subset_undetermined`, `ambiguous_no_distinguishing_key` |
+
+Collapsed into one bucket, the queue would tell an operator to go hunting for a bank row that
+is sitting right in front of them. The two also have different owners and different costs, so
+they cannot share a resolution message (D-0015).
+
+The class is **derived** from `reason_code` via the `core.records.REASON_CLASS` registry rather
+than stored alongside it, so a code and its class cannot drift apart; an unregistered code
+fails at `Label` construction. It is written into the labels file anyway, so that file is
+self-describing to a reader without the registry to hand.
 
 ### 3.8 Group semantics
 
@@ -420,6 +445,37 @@ Three rules:
 
 `min_instances_exceeding_record_cap = 1` in `scenarios.toml` guarantees at least one case per
 dataset where truncation actually fires, so the path is exercised rather than assumed.
+
+### 4.3 Ground truth encodes what is *determinable*, not what the generator knows
+
+Writing the generator forced this out into the open, and it changes what the metrics mean.
+
+For an M5 batch the generator knows exactly which two pool rows went into the settlement.
+But **the data as given does not determine them** — every one of the `C(k,2)` pairs closes δ
+equally well. So if ground truth labelled those records matchable, an engine that correctly
+**refused** would be scored as having missed a match. The metric would punish precisely the
+behaviour the design asks for.
+
+So: **M5 records are labelled `unmatchable`** with reason `ambiguous_subset_undetermined`.
+Refusing is correct, and it scores as correct.
+
+**M6 is the exact opposite, and the contrast is the point.** Its δ *is* determined — one
+subset closes it — just not findable inside the node budget. Those records stay **matchable**,
+so `SUBSET_SEARCH_EXHAUSTED` scores as an **honest miss**, not a correct refusal.
+
+| | δ determined by the data? | Label | Correct engine behaviour | How it scores |
+|---|---|---|---|---|
+| M5 | **No** — many equal answers | `unmatchable` | refuse, `AMBIGUOUS` | correctly flagged |
+| M6 | **Yes** — one answer, out of reach | matchable | `SUBSET_SEARCH_EXHAUSTED` | missed match |
+
+**Giving up and declining are not the same thing**, and the metrics must not conflate them. An
+exception that says "I could not determine this" is a success; one that says "I ran out of
+budget" is an honest failure. Both are worth reporting, and reporting them as the same number
+would hide the more interesting one.
+
+The same rule governs pathology 7 (two customers, same amount, same day, no distinguishing
+key): labelled `unmatchable` with `ambiguous_no_distinguishing_key`, because no correct system
+could do better than decline.
 
 #### This is a stress dataset, and the README must say so
 

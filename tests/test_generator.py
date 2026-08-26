@@ -395,20 +395,73 @@ def test_delta_is_signed_in_both_directions(dataset_name: str) -> None:
 @generated
 @pytest.mark.parametrize("dataset_name", DATASETS)
 def test_unassigned_pool_is_the_search_space_and_is_bounded(dataset_name: str) -> None:
-    """The pool is what gets searched, so its size is what makes the search tractable."""
+    """The pool is what gets searched, so its size is what makes the search tractable.
+
+    Measured **excluding the M6 batch**, which is deliberately pathological: averaging a
+    40-plus-row pool into the realism figure would let one intentional outlier decide whether
+    the other 29 batches look like a real export. M6's size is asserted separately below.
+    """
     from data.generator import generate_dataset
 
     config = load_config()["settlement"]
     dataset = generate_dataset(dataset_name)
 
-    pool = [r for r in dataset.gateway_rows if not r.settlement_id]
-    share = len(pool) / len(dataset.gateway_rows)
+    oversized_pool_ids = [
+        row_id
+        for label in dataset.settlement_labels
+        if label.mechanism == "pool_beyond_node_budget"
+        for row_id in label.pool_row_ids
+    ]
+    ordinary_rows = [r for r in dataset.gateway_rows if r.row_id not in oversized_pool_ids]
+    ordinary_pool = [r for r in ordinary_rows if not r.settlement_id]
+    share = len(ordinary_pool) / len(ordinary_rows)
 
-    assert pool, "the unassigned pool is empty, so δ can only ever be 0"
+    assert ordinary_pool, "the unassigned pool is empty, so δ can only ever be 0"
     assert 0.05 <= share <= 0.25, (
-        f"{dataset_name}: unassigned pool is {share:.1%} of gateway rows; SPEC §4.1 targets "
-        f"~{config['unassigned_pool_share']:.0%}. Too small and Layer 2 starves; too large "
-        "and the dataset stops resembling a real export."
+        f"{dataset_name}: ordinary unassigned pool is {share:.1%} of gateway rows; SPEC §4.1 "
+        f"targets ~{config['unassigned_pool_share']:.0%}. Too small and Layer 2 starves; too "
+        "large and the dataset stops resembling a real export."
+    )
+
+
+@generated
+@pytest.mark.parametrize("dataset_name", DATASETS)
+def test_the_oversized_pool_is_actually_oversized(dataset_name: str) -> None:
+    """M6's whole job is to be too big to search within budget, so check that it is."""
+    from data.generator import generate_dataset
+
+    floor = load_config()["mechanism"]["pool_beyond_node_budget"]["pool_rows_min"]
+    dataset = generate_dataset(dataset_name)
+
+    sizes = [
+        len(label.pool_row_ids)
+        for label in dataset.settlement_labels
+        if label.mechanism == "pool_beyond_node_budget"
+    ]
+    assert sizes, f"{dataset_name}: no M6 batch at all"
+    assert all(size >= floor for size in sizes), (
+        f"{dataset_name}: M6 pool sizes {sizes}, expected every one >= {floor}"
+    )
+
+
+@generated
+@pytest.mark.parametrize("dataset_name", DATASETS)
+def test_per_batch_pools_stay_in_the_tractable_band(dataset_name: str) -> None:
+    """Ordinary δ batches must be solvable within budget, or Layer 2 only ever times out."""
+    from data.generator import generate_dataset
+
+    settlement = load_config()["settlement"]
+    dataset = generate_dataset(dataset_name)
+
+    oversized = [
+        len(label.pool_row_ids)
+        for label in dataset.settlement_labels
+        if label.mechanism and label.mechanism != "pool_beyond_node_budget"
+    ]
+    assert oversized, f"{dataset_name}: no δ batches with a pool"
+    assert max(oversized) <= settlement["pool_rows_max"], (
+        f"{dataset_name}: an ordinary δ batch has a pool of {max(oversized)} rows, above the "
+        f"tractable ceiling of {settlement['pool_rows_max']}"
     )
 
 
@@ -425,6 +478,112 @@ def test_both_datasets_contain_every_pathology_at_least_twice(dataset_name: str)
 
     thin = {p: counts.get(p, 0) for p in range(1, PATHOLOGY_COUNT + 1) if counts.get(p, 0) < 2}
     assert not thin, f"{dataset_name}: pathologies appearing fewer than twice: {thin}"
+
+
+@generated
+def test_committed_hash_manifest_matches_a_fresh_generation() -> None:
+    """D-0007: the datasets are not committed, so the freeze is a committed hash manifest.
+
+    Trusting the seed alone is not enough — a refactor can change the *order* in which a
+    refactored generator consumes the PRNG without touching the seed, silently producing a
+    different dataset under identical provenance. That is the bug this catches.
+
+    Byte-level determinism across processes and `PYTHONHASHSEED` values is verified separately
+    by `make seed`; this test guards against drift over time.
+    """
+    from data.generator import HASH_MANIFEST, REPO_ROOT, emit, generate_dataset, sha256_of
+
+    if not HASH_MANIFEST.exists():
+        pytest.skip("run `make seed` to write data/DATASET_HASHES.txt")
+
+    committed = HASH_MANIFEST.read_text(encoding="utf-8").strip().splitlines()
+
+    regenerated: list[str] = []
+    for name in sorted(DATASETS):
+        for path in emit(generate_dataset(name)):
+            regenerated.append(f"{sha256_of(path)}  {path.relative_to(REPO_ROOT)}")
+
+    assert regenerated == committed, (
+        "regenerated dataset hashes differ from the committed manifest. Either the generator "
+        "changed intentionally — in which case re-run `make seed` and commit the new manifest "
+        "with a DECISIONS.md note — or a refactor shifted PRNG consumption order and the "
+        '"frozen" datasets quietly moved.'
+    )
+
+
+@generated
+@pytest.mark.parametrize("dataset_name", DATASETS)
+def test_m5_is_unmatchable_but_m6_is_not(dataset_name: str) -> None:
+    """SPEC §4.3: declining and giving up must not score the same way.
+
+    M5's δ is genuinely undetermined, so refusing is correct and its records are unmatchable.
+    M6's δ *is* determined, just out of budget reach, so its records stay matchable and
+    exhausting the search is an honest miss. Conflating the two would let a system score a
+    timeout as a principled refusal.
+    """
+    from data.generator import generate_dataset
+
+    dataset = generate_dataset(dataset_name)
+    label_by_id = {label.row_id: label for label in dataset.labels}
+
+    for settlement in dataset.settlement_labels:
+        if settlement.mechanism == "multiple_subsets_explain_delta":
+            for row_id in settlement.true_member_row_ids:
+                assert label_by_id[row_id].unmatchable, (
+                    f"{row_id}: an M5 record must be unmatchable, or refusing it scores as a "
+                    "missed match and the metric punishes correct behaviour (SPEC §4.3)"
+                )
+        elif settlement.mechanism == "pool_beyond_node_budget":
+            for row_id in settlement.true_member_row_ids:
+                assert not label_by_id[row_id].unmatchable, (
+                    f"{row_id}: an M6 record must stay matchable, so exhausting the budget "
+                    "scores as an honest miss rather than a correct refusal (SPEC §4.3)"
+                )
+
+
+@generated
+@pytest.mark.parametrize("dataset_name", DATASETS)
+def test_unmatchable_records_split_absent_from_undetermined(dataset_name: str) -> None:
+    """Both classes must occur, because the exception queue says different things about them.
+
+    `absent` means no partner exists — chase the feed. `undetermined` means a partner exists
+    but the data cannot say which — chasing the feed will not help, because the rows are
+    already all there and simply do not discriminate. Collapsing the two would have the queue
+    send an operator hunting for a bank row sitting right in front of them.
+    """
+    from core.records import REASON_CLASS
+    from data.generator import generate_dataset
+
+    dataset = generate_dataset(dataset_name)
+    unmatchable = [label for label in dataset.labels if label.unmatchable]
+    assert unmatchable, f"{dataset_name}: no unmatchable records at all"
+
+    classes = defaultdict(int)
+    for label in unmatchable:
+        assert label.reason_code in REASON_CLASS, f"{label.reason_code} unregistered"
+        classes[label.unmatchable_class] += 1
+
+    assert classes["absent"] >= 2, f"{dataset_name}: too few `absent` records: {dict(classes)}"
+    assert classes["undetermined"] >= 2, (
+        f"{dataset_name}: too few `undetermined` records: {dict(classes)}"
+    )
+
+
+@generated
+@pytest.mark.parametrize("dataset_name", DATASETS)
+def test_the_two_unmatchable_classes_land_on_the_right_pathologies(dataset_name: str) -> None:
+    """Pathologies 8 and 11 are `absent`; pathology 7 and M5 are `undetermined`."""
+    from data.generator import generate_dataset
+
+    dataset = generate_dataset(dataset_name)
+    by_pathology: dict[int, set[str | None]] = defaultdict(set)
+    for label in dataset.labels:
+        if label.unmatchable:
+            by_pathology[label.pathology].add(label.unmatchable_class)
+
+    assert by_pathology[8] == {"absent"}, f"pathology 8 (feed gap): {by_pathology[8]}"
+    assert by_pathology[11] == {"absent"}, f"pathology 11 (orphan adj): {by_pathology[11]}"
+    assert by_pathology[7] == {"undetermined"}, f"pathology 7 (ambiguous): {by_pathology[7]}"
 
 
 @generated

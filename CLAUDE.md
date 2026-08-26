@@ -23,8 +23,8 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 0 complete and reviewed. Phase 1 is unblocked — start at
-`core/money.py`.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
+**Current phase: Phase 1 complete, `docs/SPEC.md` frozen. Next is Phase 2 —
+`core/normalize.py`, Layer 1, the audit ledger, harness v1.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
 wins.
 
 ---
@@ -66,7 +66,7 @@ Re-read them at the start of every session.
 
 | Invariant | Enforced by | Status |
 |---|---|---|
-| 1 | `tests/test_invariants.py::test_no_float_in_money_signatures` + `::test_money_module_never_calls_float` | skips until `core/money.py` exists (Phase 1) |
+| 1 | `tests/test_invariants.py::test_no_float_in_money_signatures` + `::test_money_module_never_calls_float` | **active** — `core/money.py` landed in Phase 1 |
 | 2 | `tests/test_invariants.py::test_core_never_imports_ground_truth` | active |
 | 6 | `.githooks/pre-commit` → `scripts/check_secrets.py`, installed by `make setup` | active |
 

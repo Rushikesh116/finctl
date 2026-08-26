@@ -6,25 +6,22 @@ this file wins.
 
 > ## Next action
 >
-> **Phase 1 is unblocked. Start at `core/money.py`.**
+> **Phase 2 — normalisation, Layer 1, the audit ledger, and harness v1.**
 >
-> Build order within Phase 1, each step testable before the next: `core/money.py` →
-> `core/records.py` → `data/scenarios.toml` → `data/generator.py` → both datasets →
-> `data/DATASET_HASHES.txt` → freeze `SPEC.md`.
+> Build order: `core/normalize.py` → `core/identity.py` → `audit/ledger.py` →
+> `eval/harness.py`. Then paste the baseline metrics block into `docs/METRICS.md` with its
+> command and git SHA. Expect roughly 85% on exact matching alone; **whatever it prints is
+> the number every later phase is measured against**, so it gets recorded before anything is
+> tuned.
 >
-> Write `core/money.py` first and get the two skipped invariant tests to run. Everything
-> downstream inherits its correctness, and a generator built on wrong money arithmetic makes
-> every later metric a lie.
+> `docs/SPEC.md` is **frozen** as of the Phase 1 gate. Changing it needs a `DECISIONS.md`
+> entry and approval.
 >
-> Settled at the Phase 0 review (2026-08-26): **Q-001** → `scenarios.toml` via stdlib
-> `tomllib` (D-0010). **Q-002** → `SPEC.md` §4 freezes on separate `fee_base` + `gst`
-> subtraction, flagged as an assumption (D-0011). **Q-008** → `transfer` rows out of scope
-> (D-0012). **Q-013** → Python 3.13 everywhere, confirmed (D-0001).
->
-> Still outstanding, none blocking: **Q-004** (USD→INR rate; harness prints `Rs TBD` until
-> set), **Q-005/Q-006/Q-007/Q-010/Q-011** (domain facts no fetched doc answers — carried as
-> stated assumptions), **Q-009** (plugin installs need a human; the marketplace here is
-> `claude-plugins-official`, so the brief's names will not resolve as written).
+> Outstanding questions, none blocking: **Q-004** (USD→INR rate; the harness prints `Rs TBD`
+> until one is pinned), **Q-002/Q-005/Q-006/Q-007/Q-010/Q-011/Q-014** (domain facts no fetched
+> document answers — carried as stated assumptions the README must name), **Q-009** (plugin
+> installs need a human; the marketplace here is `claude-plugins-official`, so the brief's
+> names will not resolve as written).
 
 ---
 
@@ -55,41 +52,57 @@ commit.
 
 ---
 
-## Phase 1 — money and the data generator · **READY** (unblocked 2026-08-26)
+## Phase 1 — money and the data generator · **PASS** (2026-08-26)
 
 The most important phase: if the generator is wrong, every metric downstream is a lie.
+
+**Gate evidence.** `110 passed, 0 skipped`. Both datasets generated in four separate `make
+seed` processes under `PYTHONHASHSEED` 0, 12345, and `random` twice — all eight files
+byte-identical by `cmp`, not merely hash-equal. Verified the check has power with a negative
+control: injecting a `set`-iteration order leak into the merchant emission made the hashes
+diverge per seed (`0dbf72be…` vs `ae09a8df…`), and removing it restored `052824af…`.
+
+| Measure | dev_seed_11 | holdout_seed_97 |
+|---|---|---|
+| Records | 477 | 480 |
+| Batches / bank credits | 30 / 28 | 30 / 28 |
+| **δ ≠ 0 (floor 30%)** | **12/28 = 42.9%** | **12/28 = 42.9%** |
+| δ > 0 / δ < 0 | 10 / 2 | 10 / 2 |
+| M5 closing subsets per case | 10, 21 (both truncate cap 5) | 6, 21 (both truncate) |
+| M6 pool size | 44 | 44 |
+| All twelve pathologies ≥ 2 | yes | yes |
 
 - [x] `core/money.py` — integer minor units, parsing, Indian-grouped formatting,
       `pct_half_up`, `split_with_remainder`, integer FX conversion. **All guards `raise`,
       verified to survive `python -O`.** 64 tests pass, 0 skipped
-- [ ] `core/records.py` — canonical schemas per `SPEC.md` §3 (`core` owns them; `data` and
+- [x] `core/records.py` — canonical schemas per `SPEC.md` §3 (`core` owns them; `data` and
       `eval` import *from* `core`)
 - [x] `data/scenarios.toml` — twelve pathologies with mix weights **plus six `[mechanism.*]`
       tables** that make δ ≠ 0 happen, stdlib `tomllib` (D-0010). 10 config tests live now
-- [ ] `data/generator.py` — three sources **plus** a separate ground-truth labels file
-- [ ] `dev_seed_11` (~500 records) and `holdout_seed_97` (~500, different seed)
-- [ ] `data/DATASET_HASHES.txt` — committed SHA-256 manifest (D-0007)
+- [x] `data/generator.py` — three sources **plus** a separate ground-truth labels file
+- [x] `dev_seed_11` (~500 records) and `holdout_seed_97` (~500, different seed)
+- [x] `data/DATASET_HASHES.txt` — committed SHA-256 manifest (D-0007)
 
 **Gate:**
-- [ ] `make seed` twice yields identical file hashes
-- [ ] A test asserts every pathology appears **at least twice** in **each** dataset
-- [ ] Both forms of the netting identity (`SPEC.md` §4) agree on every generated batch
-- [ ] **≥30% of settlement batches have δ ≠ 0 under the trivial `settlement_utr` join**
+- [x] `make seed` twice yields identical file hashes
+- [x] A test asserts every pathology appears **at least twice** in **each** dataset
+- [x] Both forms of the netting identity (`SPEC.md` §4) agree on every generated batch
+- [x] **≥30% of settlement batches have δ ≠ 0 under the trivial `settlement_utr` join**
       (`SPEC.md` §4.1) — the test that keeps Layer 2 from being dead code
-- [ ] δ occurs in **both** directions: short rows (M1/M2) and over-collected rows (M4)
-- [ ] **Every mechanism meets its `min_instances` floor in BOTH datasets** (M1:3, M2:2,
+- [x] δ occurs in **both** directions: short rows (M1/M2) and over-collected rows (M4)
+- [x] **Every mechanism meets its `min_instances` floor in BOTH datasets** (M1:3, M2:2,
       M3:2, M4:2, M5:2, M6:1 — 12 over 30 batches = 40%), constructed first and then filled
       by weight. A fraction on dev says nothing about the holdout, and Phase 6 gets one shot
-- [ ] ≥1 M5 case per dataset with **more closing subsets than the evidence cap**, so the
+- [x] ≥1 M5 case per dataset with **more closing subsets than the evidence cap**, so the
       truncation path of `SPEC.md` §4.2 is exercised rather than assumed
-- [ ] Every subset in `SettlementLabel.explaining_subsets` independently sums to δ
-- [ ] Pathology 8 rows are `unmatchable` with a `reason_code` and **no group** (`SPEC.md` §3.8)
-- [ ] Dispute legs carry `dispute_id`; pathology 11 rows carry three nulls (`SPEC.md` §5.1)
-- [ ] Every record has exactly one label; no record labelled twice
-- [ ] `split_with_remainder` has a **property test**: `sum(parts) == total` over random inputs
+- [x] Every subset in `SettlementLabel.explaining_subsets` independently sums to δ
+- [x] Pathology 8 rows are `unmatchable` with a `reason_code` and **no group** (`SPEC.md` §3.8)
+- [x] Dispute legs carry `dispute_id`; pathology 11 rows carry three nulls (`SPEC.md` §5.1)
+- [x] Every record has exactly one label; no record labelled twice
+- [x] `split_with_remainder` has a **property test**: `sum(parts) == total` over random inputs
 - [x] `test_no_float_in_money_signatures`, `test_money_module_never_calls_float` and
       `test_money_module_uses_exceptions_not_asserts` **no longer skip**
-- [ ] `docs/SPEC.md` frozen
+- [x] `docs/SPEC.md` frozen
 
 ---
 
