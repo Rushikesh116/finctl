@@ -192,6 +192,34 @@ raising `MISSING_BANK_ROW` scores as **correctly flagged** rather than as a miss
 against a group no bank row could ever complete. "Absence vs. mismatch" is a distinction the
 labels have to make, or the metric cannot.
 
+### 3.9 `SettlementLabel` (batch-level ground truth)
+
+Record labels are per record; the δ mechanisms are per *batch*. So ground truth carries a
+second, batch-level structure in the same labels file.
+
+| Field | Type | Notes |
+|---|---|---|
+| `settlement_id` | `str` | `setl_…` |
+| `settlement_utr` | `str \| None` | `None` when the settlement had no UTR at export time |
+| `bank_row_id` | `str \| None` | `None` for pathology 8 — the credit does not exist |
+| `mechanism` | `str \| None` | which `[mechanism.*]` was applied; `None` for a clean batch |
+| `true_member_row_ids` | `list[str]` | the batch's actual membership |
+| `delta_paise` | `int` | δ under the trivial `settlement_utr` join; `0` for a clean batch |
+| `explaining_subsets` | `list[list[str]]` | **M5 only**: every subset of the pool that closes δ |
+
+Two things this buys, beyond satisfying the floors:
+
+- **Per-mechanism accuracy becomes reportable.** "Layer 2 resolves M1 but not M2" is a far
+  more useful finding than a single aggregate rate, and it is the kind of thing the ablation
+  table can show concretely.
+- **The M5 refusal becomes checkable.** `explaining_subsets` is the full set of correct
+  answers, so a Phase 3 test can assert the engine found *all* of them rather than stopping
+  at two and declaring ambiguity. An engine that finds 2 of 21 and refuses is right by
+  accident; one that finds 21 and refuses is right on purpose.
+
+`mechanism` is an attribution, not a hint — it lives in the labels file, which `core/` cannot
+import (invariant 2), so the matcher can never read which mechanism it is up against.
+
 ## 4. The settlement balance identity
 
 > **FROZEN on the separate-subtraction form (D-0011).** `fee_base` and `gst` are subtracted
@@ -295,7 +323,7 @@ pending rows that could account for its shortfall.
 | M2 | **On-hold release with misleading dates** | Released rows carry `created_at` from period *n* but belong to batch *n+k*. They enter the unassigned pool looking temporally wrong, so a naively date-windowed candidate filter excludes the very rows that explain δ. | 10 |
 | M3 | **Credit with no parseable UTR** | The narration carries no extractable reference, so there is no join at all and `δ` = the entire credit. Resolved first by matching complete batch totals (a cheap scalar match over ~26 candidates), and only then by row-level search. | 2, 12 |
 | M4 | **Duplicate reference contamination** | The same `reference` on two dates joins rows from two settlements into one candidate set, so `δ < 0`. Partitioning on `settled_at` resolves most; when the dates collide too it is a `DUPLICATE_REFERENCE` exception. | 2 |
-| M5 | **Multiple distinct subsets explain δ** | More than one subset of the pool sums to δ, so **the arithmetic does not determine the answer.** | 7 (same principle) |
+| M5 | **Multiple distinct subsets explain δ** | More than one subset of the pool sums to δ, so **the arithmetic does not determine the answer.** Constructed from *k* equal-amount rows with δ = 2× that amount, giving `C(k,2)` closing subsets — repeated equal amounts are everywhere in real payment data, so this is the natural source of subset ambiguity rather than an invented one. | 7 (same principle) |
 
 **M5 is the honest stopping condition, and it matters more than pool size.** When two
 different subsets both close δ, picking the first one found is a coin flip dressed up as a
@@ -321,18 +349,77 @@ passes is a test that flakes the moment a weight shifts.
 Enforced by `tests/test_generator.py::test_delta_nonzero_fraction_meets_design_target`.
 Weights live in `data/scenarios.toml` under `[mechanism.*]`.
 
+**Every mechanism carries a `min_instances` floor that the generator guarantees in *both*
+datasets** — constructed first, then the remainder filled by weight. Weights alone are not
+sufficient, and M6 shows why: at weight 0.03 over 30 batches its expected count is ~0.9, so
+a weight-only draw leaves a meaningful share of seeds with **zero** instances. If the
+holdout is one of them, Phase 6's single shot reports an untested bound and the
+`SUBSET_SEARCH_EXHAUSTED` column is empty with nothing to explain why.
+
+| Mechanism | `min_instances`, per dataset | What it guarantees is observable |
+|---|---|---|
+| M1 export cutoff skew | 3 | Layer 2 succeeds on δ > 0 (rows in the pool) |
+| M2 on-hold release, misdated | 2 | A naive date window is punished |
+| M3 credit with no parseable UTR | 2 | Batch-total scalar match, then row search |
+| M4 duplicate reference | 2 | Layer 2 handles δ < 0 (over-collection) |
+| M5 multiple subsets explain δ | 2 (**≥1 exceeding the record cap**) | Layer 2 **refuses** — `AMBIGUOUS` |
+| M6 pool beyond node budget | 1 | Layer 2 **gives up honestly** — `SUBSET_SEARCH_EXHAUSTED` |
+| | **12 total → 12/30 = 40%** | |
+
+The floor sum is what sets `target_batches`, not the other way round: 12 floors over 26
+batches would force 46% and contradict the stated 40% target, so the batch count is 30. A
+config test asserts that consistency, so the two cannot drift apart silently.
+
 Search-space properties, also asserted:
 
 | Property | Target | Why |
 |---|---|---|
 | Unassigned pool, per δ≠0 batch | 4–18 rows typical | Subset-sum is tractable within budget, so Layer 2 measurably *succeeds* |
-| Batches where **≥2 distinct subsets** explain δ | **≥2 per dataset** | Layer 2 measurably *refuses* — `AMBIGUOUS`, not a coin flip |
-| Batches with a pool ≥ 40 rows | **≥1 per dataset** | Layer 2 measurably *gives up honestly* — `SUBSET_SEARCH_EXHAUSTED` is visible in every run |
 | Total unassigned pool | ~10–15% of gateway rows | A realistic pending-writeback fraction |
 
-Those three rows are the point: a bounded search that only ever succeeds has not
-demonstrated its bound, and one that only ever times out has not demonstrated its search.
-Every run must show all three outcomes.
+The three outcome floors above are the point: a bounded search that only ever succeeds has
+not demonstrated its bound, and one that only ever times out has not demonstrated its
+search. **Every run, on either dataset, must show all three outcomes.**
+
+### 4.2 Refusal evidence: what an `AMBIGUOUS` exception must record
+
+A refusal is only worth anything if it is **auditable**. "More than one subset explained δ"
+is a claim; the subsets themselves are evidence. A judge reading the exception should be
+able to see the candidate sets side by side and check them, without querying anything.
+
+So an `AMBIGUOUS` exception raised by Layer 2 records:
+
+| Field | Type | Notes |
+|---|---|---|
+| `delta_paise` | `int` | the δ every recorded subset must close |
+| `subsets_found` | `int` | **the true total, even when it exceeds the cap** |
+| `subsets_recorded` | `int` | how many are in `subsets` below; ≤ the cap |
+| `truncated` | `bool` | `subsets_found > subsets_recorded` |
+| `subsets` | `list[SubsetEvidence]` | the candidate sets |
+
+where each `SubsetEvidence` is:
+
+| Field | Type | Notes |
+|---|---|---|
+| `row_ids` | `list[str]` | the gateway rows in this subset |
+| `sum_paise` | `int` | **recorded explicitly**, so a reader can verify `sum_paise == delta_paise` without joining back to the records |
+
+Three rules:
+
+1. **Every recorded subset must independently sum to `delta_paise`.** A Phase 3 test asserts
+   it on every `AMBIGUOUS` exception the engine emits. A recorded subset that does not close
+   δ is not evidence of ambiguity, it is a bug in the search.
+2. **The cap is `FINCTL_AMBIGUOUS_SUBSETS_RECORDED_MAX`, default 5**, so a pathological case
+   cannot blow up the audit log. With `C(7,2) = 21` reachable from seven equal-amount rows,
+   this is not hypothetical.
+3. **Truncation must be visible.** `subsets_found` carries the real count and `truncated` is
+   set. A log that says "2 subsets" when 21 existed understates the refusal and would let a
+   reader conclude the case was nearly determined when it was nowhere close. This is the same
+   principle as `SUBSET_SEARCH_EXHAUSTED`: a bound that hides its own operation is worse than
+   no bound, because it looks like it worked.
+
+`min_instances_exceeding_record_cap = 1` in `scenarios.toml` guarantees at least one case per
+dataset where truncation actually fires, so the path is exercised rather than assumed.
 
 #### This is a stress dataset, and the README must say so
 

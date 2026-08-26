@@ -77,9 +77,12 @@ The most important phase: if the generator is wrong, every metric downstream is 
 - [ ] **≥30% of settlement batches have δ ≠ 0 under the trivial `settlement_utr` join**
       (`SPEC.md` §4.1) — the test that keeps Layer 2 from being dead code
 - [ ] δ occurs in **both** directions: short rows (M1/M2) and over-collected rows (M4)
-- [ ] ≥2 batches per dataset where **multiple subsets** explain δ → Layer 2 must refuse
-- [ ] ≥1 batch per dataset whose pool exceeds the node budget → `SUBSET_SEARCH_EXHAUSTED`
-      visible in every run
+- [ ] **Every mechanism meets its `min_instances` floor in BOTH datasets** (M1:3, M2:2,
+      M3:2, M4:2, M5:2, M6:1 — 12 over 30 batches = 40%), constructed first and then filled
+      by weight. A fraction on dev says nothing about the holdout, and Phase 6 gets one shot
+- [ ] ≥1 M5 case per dataset with **more closing subsets than the evidence cap**, so the
+      truncation path of `SPEC.md` §4.2 is exercised rather than assumed
+- [ ] Every subset in `SettlementLabel.explaining_subsets` independently sums to δ
 - [ ] Pathology 8 rows are `unmatchable` with a `reason_code` and **no group** (`SPEC.md` §3.8)
 - [ ] Dispute legs carry `dispute_id`; pathology 11 rows carry three nulls (`SPEC.md` §5.1)
 - [ ] Every record has exactly one label; no record labelled twice
@@ -116,6 +119,13 @@ The hardest algorithmic piece.
 - [ ] Balance-identity check first; `δ == 0` reconciles the whole batch at once
 - [ ] Bounded subset search for δ: node budget **and** wall-clock timeout, both configurable
 - [ ] Overflow becomes a typed exception (`SUBSET_SEARCH_EXHAUSTED`), never a silent drop
+- [ ] **≥2 distinct closing subsets ⇒ refuse with `AMBIGUOUS`**, carrying the §4.2 evidence
+- [ ] Every subset an `AMBIGUOUS` exception records independently sums to δ (§4.2 rule 1)
+- [ ] Truncation is visible: true `subsets_found` plus a `truncated` flag, never a silent cap
+- [ ] The engine finds **all** closing subsets before refusing — finding 2 of 21 and refusing
+      is right by accident; ground truth's `explaining_subsets` is what makes that checkable
+- [ ] Absence is not searched: a batch with a UTR and no credit is `MISSING_BANK_ROW`
+      immediately (`SPEC.md` §4.1 M0)
 
 **Gate:**
 - [ ] Match rate improves **measurably** over Phase 2
