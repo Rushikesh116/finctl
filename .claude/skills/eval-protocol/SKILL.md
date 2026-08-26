@@ -154,7 +154,7 @@ SPEC freeze.
 
 | Type | Meaning | Pathology |
 |---|---|---|
-| `AMBIGUOUS` | two or more candidates within the score margin; refused on purpose | 7 |
+| `AMBIGUOUS` | the evidence does not determine a unique answer, so the match is refused on purpose. Two sources: **Layer 2**, where ≥2 distinct subsets of the pool explain δ; **Layer 3**, where best and second-best candidates fall within the score margin. The explanation must name which layer refused | 7 |
 | `MISSING_BANK_ROW` | gateway says settled, no bank credit exists | 8 |
 | `MISSING_GATEWAY_ROW` | bank credit with no gateway batch | 8 |
 | `DUPLICATE_REFERENCE` | reference reused across days, cannot disambiguate | 2 |

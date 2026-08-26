@@ -205,6 +205,33 @@ then on. The LLM writes rules; the rules do the work. Related: U-6.
 
 ---
 
+## Q-014 — Does the gateway's row-level writeback actually lag the money movement?
+
+`SPEC.md` §4.1 mechanism **M1 (export cutoff skew)** is the primary reason δ ≠ 0 in the
+generated data, so it carries a lot of weight: rows settled near the export cutoff appear
+with `settled=false` and null settlement fields even though the bank credit for their batch
+has already posted.
+
+**What is grounded.** The documented settlement `status` enum is `created | processed |
+failed`, and `utr` is described as coming from the bank ("available across banks") — so a
+settlement genuinely can exist before its UTR does. And source systems with different
+write-back latencies producing an internally inconsistent period-boundary export is a
+universal finance-ops problem, not a novel invention.
+
+**What is not.** Whether *this* gateway specifically leaves rows in that state, and for how
+long. No fetched page describes export cutoff behaviour.
+
+**Why it is acceptable to build on.** M1 is a statement about the *input data FinCtl is
+handed*, not about gateway internals. Any merchant pulling a recon report at a period
+boundary faces some version of it; FinCtl's claim is that it handles rows whose settlement
+assignment is pending, which is true regardless of the precise upstream cause. The README
+names it as a stated assumption.
+
+**Resolves when:** a real recon report is pulled across a settlement boundary and the row
+states inspected.
+
+---
+
 ## Q-013 — Dockerfile base image differs from the brief
 
 **Status: RESOLVED 2026-08-26 — confirmed by the user. Keep 3.13 everywhere.**

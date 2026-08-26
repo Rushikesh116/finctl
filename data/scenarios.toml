@@ -1,0 +1,219 @@
+# FinCtl scenario configuration — what the generator builds and how often.
+#
+# TOML rather than YAML (D-0010): parsed by stdlib `tomllib`, no new dependency, and the
+# weights keep their inline reasoning. That last part is the point — a weight without a
+# justification is a magic number, and a judge reading this file should be able to see why
+# each one is what it is.
+#
+# Two independent knobs live here:
+#
+#   [pathology.*]  record-level trouble: what kinds, how often
+#   [mechanism.*]  what makes the trivial settlement_utr join WRONG, and how often
+#
+# The second set is what gives Layer 2 a job. Without it the identity balances by
+# construction, δ is always 0, the bounded subset search never fires, and the most
+# distinctive part of the project is dead code. See docs/SPEC.md §4.1.
+#
+# Weights are relative within their own table, not percentages. The generator normalises.
+
+[dataset]
+target_records   = 500      # the brief asks for ~500 per dataset
+period_start_ist = "2026-03-01"
+period_end_ist   = "2026-03-31"   # a quarter-end, so pathology 3 lands on a real boundary
+
+# Source split. Bank rows are fewest because one credit nets many gateway rows — that
+# asymmetry is the whole reason this is set reconstruction and not a join.
+merchant_share = 0.30
+gateway_share  = 0.50
+bank_share     = 0.20
+
+
+[settlement]
+target_batches = 26         # ~26 batches over ~250 gateway rows, averaging ~10 rows each
+batch_size_min = 3
+batch_size_max = 28
+
+# THE DESIGN TARGET (docs/SPEC.md §4.1). Fraction of batches that must have δ ≠ 0 under the
+# trivial settlement_utr join. Asserted by
+# tests/test_generator.py::test_delta_nonzero_fraction_meets_design_target.
+delta_nonzero_fraction_min = 0.30
+
+# Aim above the floor so the assertion is not marginal. A test that barely passes is a test
+# that flakes the moment a weight shifts.
+delta_nonzero_fraction_target = 0.38
+
+# Total unassigned pool as a fraction of gateway rows — rows whose settlement_id is
+# legitimately null. This is the search space, and a realistic pending-writeback fraction.
+unassigned_pool_share = 0.12
+
+# Per-batch pool sizes when δ ≠ 0. Small enough that subset-sum succeeds within budget, so
+# Layer 2 measurably *works* rather than only timing out.
+pool_rows_min = 4
+pool_rows_max = 18
+
+# Documented settlement cycle is T+2 working days; pathology 9 stretches it over a holiday.
+settlement_cycle_days = 2
+bank_holidays_ist = ["2026-03-06", "2026-03-25"]
+
+# GST on the platform fee. 18% is Indian statute, not a gateway API guarantee (Q-002).
+# fee_bps is basis points of the captured amount.
+fee_bps = 200
+gst_percent = 18
+
+
+# ---------------------------------------------------------------------------------------
+# Mechanisms that break the trivial join. docs/SPEC.md §4.1 explains each one.
+# ---------------------------------------------------------------------------------------
+
+[mechanism.export_cutoff_skew]
+weight = 0.42
+# The primary driver, and the most realistic. Rows settled near the export cutoff appear
+# with settled=false and null settlement fields because the gateway's row-level writeback
+# lags the money movement — while the bank credit has already posted. The join returns an
+# incomplete batch, so δ > 0 and the missing members sit in the unassigned pool.
+# Source systems with different write-back latencies are a universal finance-ops problem;
+# what is UNVERIFIED is whether this gateway specifically behaves this way (Q-014).
+rows_short_min = 1
+rows_short_max = 5
+
+[mechanism.on_hold_release_misdated]
+weight = 0.20
+# Released rows carry created_at from period n but belong to batch n+k, so they enter the
+# pool looking temporally wrong. This exists to punish a naively date-windowed candidate
+# filter: the rows that explain δ are exactly the ones such a filter drops.
+# Release mechanics are UNVERIFIED (Q-006).
+release_lag_batches_min = 1
+release_lag_batches_max = 3
+
+[mechanism.credit_without_parseable_utr]
+weight = 0.15
+# No extractable reference in the narration, so there is no join at all and δ is the entire
+# credit. Resolved first by matching complete batch totals — a cheap scalar match over ~26
+# candidates — and only then by row-level search. Narration formats are unspecifiable by
+# nature (Q-012), which is exactly why Layer 4 learns regexes instead of shipping them.
+narration_templates = [
+    "NEFT-{sender}-UTR{utr}-{suffix}",       # parseable: the regex path
+    "NEFT CR-{sender}-{suffix}",             # no UTR at all
+    "IMPS/{suffix}/SETTLEMENT",              # no UTR at all
+    "RTGS {sender} {utr_truncated}",         # truncated: looks parseable, is not
+]
+
+[mechanism.duplicate_reference_contamination]
+weight = 0.12
+# The same reference on two dates joins rows from two settlements into one candidate set, so
+# δ < 0. Partitioning on settled_at resolves most of these deterministically; when the dates
+# collide too it is a DUPLICATE_REFERENCE exception rather than a guess.
+dates_also_collide_share = 0.35
+
+[mechanism.multiple_subsets_explain_delta]
+weight = 0.08
+# The honest stopping condition, and it matters more than pool size. When two different
+# subsets both close δ, the arithmetic does not determine the answer, and picking the first
+# one found is a coin flip dressed up as a reconciliation. Layer 2 must refuse and emit
+# AMBIGUOUS — the same principle as pathology 7, one layer down.
+min_batches_per_dataset = 2
+subsets_per_case = 2
+
+[mechanism.pool_beyond_node_budget]
+weight = 0.03
+# At least one batch per dataset whose pool is large enough to exhaust the node budget, so
+# SUBSET_SEARCH_EXHAUSTED appears in every single run. A bounded search that only ever
+# succeeds has not demonstrated its bound.
+min_batches_per_dataset = 1
+pool_rows_min = 40
+pool_rows_max = 48
+
+
+# ---------------------------------------------------------------------------------------
+# The twelve pathologies. All twelve must appear at least twice in BOTH datasets
+# (docs/SPEC.md §5); min_instances is the floor the generator guarantees, not a target.
+# ---------------------------------------------------------------------------------------
+
+[pathology.1]
+name = "settlement_netting"
+weight = 0.18
+min_instances = 2
+# The base case, not an edge case: one credit covers N payments. Batch sizes span the full
+# [batch_size_min, batch_size_max] range so set reconstruction is exercised at both ends.
+
+[pathology.2]
+name = "duplicate_bank_reference"
+weight = 0.07
+min_instances = 2
+# Same BankRow.reference on two different value dates, attacking Layer 1's primary key.
+
+[pathology.3]
+name = "period_boundary_2358_ist"
+weight = 0.05
+min_instances = 2
+# 23:58 IST on the last day of the period = 18:28Z, two minutes inside the 18:30Z cutoff.
+# A correct implementation includes it; an off-by-one one does not. See SPEC §3.4.
+
+[pathology.4]
+name = "partial_refund_clawed_back_next_cycle"
+weight = 0.08
+min_instances = 2
+# Refund carries payment_id, but settled_at falls in a later batch. Its true_group_id is the
+# batch that deducted it, NOT its parent payment (SPEC §3.8) — the payment link is a record
+# field, so the cross-batch linkage stays discoverable rather than labelled.
+
+[pathology.5]
+name = "chargeback_then_representment"
+weight = 0.06
+min_instances = 2
+# Both legs are type="adjustment" sharing a dispute_id, debit then credit (SPEC §5.1).
+# There is no `chargeback` value in the recon type enum. UNVERIFIED: Q-011.
+
+[pathology.6]
+name = "fee_plus_gst_half_paisa"
+weight = 0.09
+min_instances = 2
+# Fee bases chosen so 18% GST lands on a half-paisa, making the "sum stored per-row GST,
+# never recompute from the batch total" rule live rather than theoretical. Two rows of
+# fee_base=25 give 5 each summing to 10; pct_half_up(50,18,100) gives 9.
+fee_base_paise_candidates = [25, 75, 125, 175, 225, 275]
+
+[pathology.7]
+name = "ambiguous_same_amount_same_day"
+weight = 0.06
+min_instances = 2
+# THE DEMO CENTREPIECE. Two customers, same amount, same day, customer_ref = null on both.
+# Must produce AMBIGUOUS. A system that confidently matches this has great coverage and
+# terrible precision.
+
+[pathology.8]
+name = "missing_bank_row"
+weight = 0.07
+min_instances = 2
+# Gateway says settled, no bank credit exists. Labelled unmatchable with a reason code and
+# NO group (SPEC §3.8), so raising MISSING_BANK_ROW scores as correctly flagged. Explicitly
+# NOT a search case — see SPEC §4.1 "M0".
+
+[pathology.9]
+name = "late_settlement_over_bank_holiday"
+weight = 0.06
+min_instances = 2
+# T+5 across a holiday from bank_holidays_ist above. Date-window elasticity must be
+# justified by the holiday calendar, not widened until the numbers improve.
+
+[pathology.10]
+name = "on_hold_released_later_batch"
+weight = 0.06
+min_instances = 2
+# on_hold true in batch n, released in n+k. UNVERIFIED: Q-006.
+
+[pathology.11]
+name = "adjustment_without_reference"
+weight = 0.06
+min_instances = 2
+# type="adjustment" with dispute_id, order_id and payment_id ALL null. dispute_id is the
+# single field separating this from pathology 5 (SPEC §5.1). UNVERIFIED: Q-007.
+
+[pathology.12]
+name = "international_fx"
+weight = 0.06
+min_instances = 2
+# Non-INR original + INR settled + integer fx_rate_micros. Scales are grounded in the
+# gateway's documented examples (JPY zero-decimal, three-decimal currencies). UNVERIFIED: Q-010.
+currencies = ["USD", "EUR", "GBP", "JPY", "KWD"]
+fx_rate_micros = { USD = 83_500_000, EUR = 90_250_000, GBP = 105_750_000, JPY = 560_000, KWD = 272_400_000 }

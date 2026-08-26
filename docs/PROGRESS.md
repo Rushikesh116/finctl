@@ -64,7 +64,8 @@ The most important phase: if the generator is wrong, every metric downstream is 
       verified to survive `python -O`.** 64 tests pass, 0 skipped
 - [ ] `core/records.py` — canonical schemas per `SPEC.md` §3 (`core` owns them; `data` and
       `eval` import *from* `core`)
-- [ ] `data/scenarios.toml` — twelve pathologies with mix weights, stdlib `tomllib` (D-0010)
+- [x] `data/scenarios.toml` — twelve pathologies with mix weights **plus six `[mechanism.*]`
+      tables** that make δ ≠ 0 happen, stdlib `tomllib` (D-0010). 10 config tests live now
 - [ ] `data/generator.py` — three sources **plus** a separate ground-truth labels file
 - [ ] `dev_seed_11` (~500 records) and `holdout_seed_97` (~500, different seed)
 - [ ] `data/DATASET_HASHES.txt` — committed SHA-256 manifest (D-0007)
@@ -73,6 +74,15 @@ The most important phase: if the generator is wrong, every metric downstream is 
 - [ ] `make seed` twice yields identical file hashes
 - [ ] A test asserts every pathology appears **at least twice** in **each** dataset
 - [ ] Both forms of the netting identity (`SPEC.md` §4) agree on every generated batch
+- [ ] **≥30% of settlement batches have δ ≠ 0 under the trivial `settlement_utr` join**
+      (`SPEC.md` §4.1) — the test that keeps Layer 2 from being dead code
+- [ ] δ occurs in **both** directions: short rows (M1/M2) and over-collected rows (M4)
+- [ ] ≥2 batches per dataset where **multiple subsets** explain δ → Layer 2 must refuse
+- [ ] ≥1 batch per dataset whose pool exceeds the node budget → `SUBSET_SEARCH_EXHAUSTED`
+      visible in every run
+- [ ] Pathology 8 rows are `unmatchable` with a `reason_code` and **no group** (`SPEC.md` §3.8)
+- [ ] Dispute legs carry `dispute_id`; pathology 11 rows carry three nulls (`SPEC.md` §5.1)
+- [ ] Every record has exactly one label; no record labelled twice
 - [ ] `split_with_remainder` has a **property test**: `sum(parts) == total` over random inputs
 - [x] `test_no_float_in_money_signatures`, `test_money_module_never_calls_float` and
       `test_money_module_uses_exceptions_not_asserts` **no longer skip**

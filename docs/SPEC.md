@@ -250,6 +250,99 @@ adjustments as debits produces a δ of twice the adjustment.
 **The tolerance on δ is exactly zero paise.** Money is exact. A non-zero tolerance is the
 mechanism by which false matches enter a ledger while the headline match rate improves.
 
+### 4.1 Why δ ≠ 0, how often, and what the search space is
+
+**The failure this section exists to prevent.** If every gateway row in a batch carries
+`settlement_id` and `settlement_utr`, then reconstructing a batch is a join, the identity
+balances by construction, δ is always 0, the bounded subset search never fires, and Layer 2
+is dead code. The hardest and most distinctive part of FinCtl would have nothing to do, and
+the ablation table would show it bought nothing.
+
+**What is *not* the fix.** Deleting or nulling a documented field to make the problem harder
+would be rigging the dataset. `settlement_id` is documented and it groups rows into batches
+cheaply and correctly. That is honest, and it *should* be easy — real reconciliation is
+mostly a join, which is why it is mostly automatable.
+
+**Where the difficulty actually is.** Two places, both real:
+
+1. **Rows whose `settlement_id` is legitimately null.** A row not yet assigned to a
+   settlement has neither `settlement_id` nor `settlement_utr` — that is the truth about
+   it, not a gap. These form the **unassigned pool**.
+2. **The gateway↔bank boundary.** `settlement_utr` is the only key shared across an
+   organisational boundary, and the bank may truncate it, reuse it, or bury it in free-text
+   narration.
+
+**So the structure of the problem is:**
+
+```
+rows with settlement_id   -> grouped into batches trivially            (Layer 1)
+rows with settlement_id=null -> the unassigned pool
+δ(batch) = bank_credit − expected_credit(rows joined to that batch)
+δ > 0  -> members of this batch are sitting in the unassigned pool
+δ < 0  -> the join pulled in rows that belong elsewhere
+search  -> find the subset of the *unassigned pool* summing to δ
+```
+
+**The search space is the unassigned pool, not the batch.** That is what makes the search
+bounded and tractable at all: a 40-row batch is never enumerated, only the handful of
+pending rows that could account for its shortfall.
+
+#### The mechanisms
+
+| # | Mechanism | How it makes δ ≠ 0 | Pathology |
+|---|---|---|---|
+| M1 | **Export cutoff skew** (primary) | Rows settled near the export cutoff appear with `settled=false` and null settlement fields because the gateway's row-level writeback lags the money movement — while the bank credit for their batch has already posted. The join yields an **incomplete** batch, so `δ > 0`. | 1, 3 |
+| M2 | **On-hold release with misleading dates** | Released rows carry `created_at` from period *n* but belong to batch *n+k*. They enter the unassigned pool looking temporally wrong, so a naively date-windowed candidate filter excludes the very rows that explain δ. | 10 |
+| M3 | **Credit with no parseable UTR** | The narration carries no extractable reference, so there is no join at all and `δ` = the entire credit. Resolved first by matching complete batch totals (a cheap scalar match over ~26 candidates), and only then by row-level search. | 2, 12 |
+| M4 | **Duplicate reference contamination** | The same `reference` on two dates joins rows from two settlements into one candidate set, so `δ < 0`. Partitioning on `settled_at` resolves most; when the dates collide too it is a `DUPLICATE_REFERENCE` exception. | 2 |
+| M5 | **Multiple distinct subsets explain δ** | More than one subset of the pool sums to δ, so **the arithmetic does not determine the answer.** | 7 (same principle) |
+
+**M5 is the honest stopping condition, and it matters more than pool size.** When two
+different subsets both close δ, picking the first one found is a coin flip dressed up as a
+reconciliation. Layer 2 must **refuse** and emit `AMBIGUOUS`, exactly as Layer 3 refuses
+when its best and second-best candidates fall within the margin. The refusal principle is
+the same at both layers; only the evidence differs.
+
+#### Explicitly *not* a search: absence (M0)
+
+A batch with a `settlement_utr` and **no bank credit at all** (pathology 8) is
+`MISSING_BANK_ROW` immediately. There is no scalar to reconstruct against, so there is
+nothing to search for — hunting a credit that does not exist is unbounded and pointless.
+**Distinguishing "δ ≠ 0, search" from "no counterpart, do not search" is a design
+requirement, not an optimisation.** That is the "absence vs. mismatch" distinction pathology
+8 tests, and getting it wrong shows up as a search timeout where a clean exception belonged.
+
+#### The design target
+
+**At least 30% of settlement batches must have δ ≠ 0 under the trivial `settlement_utr`
+join.** The generator aims for 35–40% so the assertion is not marginal — a test that barely
+passes is a test that flakes the moment a weight shifts.
+
+Enforced by `tests/test_generator.py::test_delta_nonzero_fraction_meets_design_target`.
+Weights live in `data/scenarios.toml` under `[mechanism.*]`.
+
+Search-space properties, also asserted:
+
+| Property | Target | Why |
+|---|---|---|
+| Unassigned pool, per δ≠0 batch | 4–18 rows typical | Subset-sum is tractable within budget, so Layer 2 measurably *succeeds* |
+| Batches where **≥2 distinct subsets** explain δ | **≥2 per dataset** | Layer 2 measurably *refuses* — `AMBIGUOUS`, not a coin flip |
+| Batches with a pool ≥ 40 rows | **≥1 per dataset** | Layer 2 measurably *gives up honestly* — `SUBSET_SEARCH_EXHAUSTED` is visible in every run |
+| Total unassigned pool | ~10–15% of gateway rows | A realistic pending-writeback fraction |
+
+Those three rows are the point: a bounded search that only ever succeeds has not
+demonstrated its bound, and one that only ever times out has not demonstrated its search.
+Every run must show all three outcomes.
+
+#### This is a stress dataset, and the README must say so
+
+The datasets are deliberately **pathology-dense**: all twelve pathologies appear at least
+twice in ~500 records, and 30%+ of batches need work beyond a join. Production traffic is
+nothing like this. So **the reported auto-match rate is not a production estimate**, and
+claiming otherwise would be the most flattering lie available. What the numbers do support
+is a comparison *between arms of the ablation on identical data*, which is what the
+ablation table is for.
+
 ## 5. The twelve pathologies
 
 All twelve must appear **at least twice** in *both* datasets; a Phase 1 test asserts it.
