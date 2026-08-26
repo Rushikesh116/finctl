@@ -22,83 +22,26 @@ Two refusals live here, both exact rather than fuzzy:
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
 
+from core import verifier
 from core.money import Paise
 from core.normalize import NormalizedDataset, expected_credit_paise, ist_date_of
 from core.records import BankRow, GatewayRow, MerchantLedgerRow
+from core.results import (
+    EX_DUPLICATE_REFERENCE,
+    EX_MISSING_BANK_ROW,
+    EX_MISSING_GATEWAY_ROW,
+    EX_UNCLASSIFIED,
+    CandidateBatch,
+    GroupProposal,
+    LayerResult,
+    MatchGroup,
+    ReconException,
+)
 
-__all__ = [
-    "LAYER",
-    "CandidateBatch",
-    "LayerResult",
-    "MatchGroup",
-    "ReconException",
-    "resolve",
-]
+__all__ = ["LAYER", "resolve", "unresolved_record_ids"]
 
 LAYER = 1
-
-# Exception types from the closed enum in .claude/skills/eval-protocol/SKILL.md §6.
-EX_MISSING_BANK_ROW = "MISSING_BANK_ROW"
-EX_MISSING_GATEWAY_ROW = "MISSING_GATEWAY_ROW"
-EX_DUPLICATE_REFERENCE = "DUPLICATE_REFERENCE"
-EX_UNCLASSIFIED = "UNCLASSIFIED"
-
-
-@dataclass(frozen=True, slots=True)
-class MatchGroup:
-    """A set of records asserted to form one reconcilable unit, verified to balance."""
-
-    group_id: str
-    layer: int
-    record_ids: tuple[str, ...]
-    settlement_id: str | None
-    bank_row_id: str | None
-    expected_credit_paise: Paise
-    actual_credit_paise: Paise
-
-    @property
-    def delta_paise(self) -> int:
-        return self.actual_credit_paise - self.expected_credit_paise
-
-
-@dataclass(frozen=True, slots=True)
-class ReconException:
-    """A record set the engine declines to match, with why."""
-
-    exception_type: str
-    layer: int
-    record_ids: tuple[str, ...]
-    amount_at_risk_paise: Paise
-    detail: str
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateBatch:
-    """A batch that joined cleanly but did not balance — Layer 2's input.
-
-    Carries δ and the pool it may draw on, so Layer 2 never has to re-derive either.
-    """
-
-    settlement_id: str
-    settlement_utr: str | None
-    bank_row_id: str
-    delta_paise: int
-    member_row_ids: tuple[str, ...]
-    merchant_row_ids: tuple[str, ...]
-
-
-@dataclass
-class LayerResult:
-    groups: list[MatchGroup] = field(default_factory=list)
-    exceptions: list[ReconException] = field(default_factory=list)
-    candidates: list[CandidateBatch] = field(default_factory=list)
-    pool_row_ids: list[str] = field(default_factory=list)
-
-    @property
-    def matched_record_ids(self) -> list[str]:
-        return [row_id for group in self.groups for row_id in group.record_ids]
 
 
 def _amount_at_risk(
@@ -162,6 +105,9 @@ def resolve(dataset: NormalizedDataset) -> LayerResult:
         ]
         merchant_ids = tuple(sorted(row.row_id for row in merchant_rows))
 
+        settled_at_for_batch = next(
+            (row.settled_at_utc for row in members if row.settled_at_utc), None
+        )
         matches = credits_by_reference.get(utr or "", [])
 
         if not matches:
@@ -183,9 +129,8 @@ def resolve(dataset: NormalizedDataset) -> LayerResult:
         if len(matches) > 1:
             # Exact composite key: reference plus value date. Uses the IST interval rule, so a
             # reference reused on a different day still resolves without any fuzzy matching.
-            settled_at = next((row.settled_at_utc for row in members if row.settled_at_utc), None)
-            if settled_at is not None:
-                target_date = ist_date_of(settled_at)
+            if settled_at_for_batch is not None:
+                target_date = ist_date_of(settled_at_for_batch)
                 narrowed = [row for row in matches if row.value_date_ist == target_date]
                 if len(narrowed) == 1:
                     matches = narrowed
@@ -214,22 +159,28 @@ def resolve(dataset: NormalizedDataset) -> LayerResult:
         claimed_bank_ids.append(credit.row_id)
 
         if delta == 0:
-            # Zero tolerance. Money is exact, and a non-zero tolerance is exactly how false
-            # matches enter a ledger while the headline rate improves.
-            result.groups.append(
-                MatchGroup(
-                    group_id=f"grp_{settlement_id}",
-                    layer=LAYER,
-                    record_ids=tuple(row.row_id for row in members)
-                    + (credit.row_id,)
-                    + merchant_ids,
-                    settlement_id=settlement_id,
-                    bank_row_id=credit.row_id,
-                    expected_credit_paise=expected,
-                    actual_credit_paise=credit.credit_paise,
-                )
+            # Zero tolerance. But Layer 1 does not approve its own work: it proposes, and
+            # core/verifier.py recomputes the arithmetic independently before anything
+            # enters the matched ledger (invariant 3).
+            proposal = GroupProposal(
+                group_id=f"grp_{settlement_id}",
+                layer=LAYER,
+                record_ids=tuple(row.row_id for row in members)
+                + (credit.row_id,)
+                + merchant_ids,
+                settlement_id=settlement_id,
+                bank_row_id=credit.row_id,
+                gateway_row_ids=tuple(row.row_id for row in members),
+                detail=f"exact join on {utr}, identity balanced at zero tolerance",
             )
-            claimed_merchant_ids.extend(merchant_ids)
+            verdict = verifier.verify(
+                proposal, gateway_by_id=gateway_by_id, bank_by_id=bank_by_id
+            )
+            if isinstance(verdict, ReconException):
+                result.exceptions.append(verdict)
+            else:
+                result.groups.append(verdict)
+                claimed_merchant_ids.extend(merchant_ids)
         else:
             result.candidates.append(
                 CandidateBatch(
@@ -239,6 +190,8 @@ def resolve(dataset: NormalizedDataset) -> LayerResult:
                     delta_paise=delta,
                     member_row_ids=tuple(row.row_id for row in members),
                     merchant_row_ids=merchant_ids,
+                    settled_at_utc=settled_at_for_batch,
+                    actual_credit_paise=credit.credit_paise,
                 )
             )
 

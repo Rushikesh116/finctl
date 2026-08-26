@@ -182,11 +182,31 @@ def test_the_design_target_is_stated_and_aimed_above_its_floor() -> None:
 
 
 def test_pool_beyond_node_budget_is_actually_beyond_a_plausible_budget() -> None:
-    """The oversized pool has to be large enough that no reasonable budget solves it."""
+    """The hardness knob is the TRUE SUBSET size, not the pool size (D-0020).
+
+    This test originally asserted `pool_rows_min >= 40` on the reasoning that a smaller pool
+    would be solved by meet-in-the-middle. That reasoning was wrong, and Phase 3 measured it:
+    a search that deepens by subset size found a 3-row explanation among 44 candidates in
+    ~14k nodes, so M6 was *resolving* and the exhausted outcome never appeared on dev.
+
+    What actually makes it hard is that every smaller size must be exhausted first. Sizes 1-4
+    over 44 candidates already cost ~150k combinations, so a true subset of 12+ puts the
+    answer out of reach of any plausible budget.
+    """
+    from math import comb
+
     oversized = load_config()["mechanism"]["pool_beyond_node_budget"]
-    assert oversized["pool_rows_min"] >= 40, (
-        f"pool_rows_min is {oversized['pool_rows_min']}; below ~40 rows a competent "
-        "meet-in-the-middle search solves it and SUBSET_SEARCH_EXHAUSTED never appears"
+    pool = oversized["pool_rows_min"]
+    smallest_true_subset = oversized["delta_rows_min"]
+
+    assert smallest_true_subset >= 8, (
+        f"delta_rows_min is {smallest_true_subset}; a true subset that small is reachable by "
+        "iterative deepening and SUBSET_SEARCH_EXHAUSTED would never appear"
+    )
+    must_exhaust_first = sum(comb(pool, k) for k in range(1, smallest_true_subset))
+    assert must_exhaust_first > 10_000_000, (
+        f"reaching the true subset only requires exhausting {must_exhaust_first:,} smaller "
+        "combinations, which a generous budget could afford"
     )
 
 

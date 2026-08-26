@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from core import identity
+from core import identity, results
 from eval import harness
 from eval.groundtruth import GroundTruth
 from eval.provenance import capture
@@ -78,7 +78,7 @@ def test_the_false_match_detector_actually_detects_a_false_match() -> None:
     corrupted = identity.resolve(data)
     harness.absorb_unresolved(data, corrupted)
     victim = corrupted.groups[0]
-    corrupted.groups[0] = identity.MatchGroup(
+    corrupted.groups[0] = results.MatchGroup(
         group_id=victim.group_id,
         layer=victim.layer,
         record_ids=victim.record_ids[:-1],
@@ -89,8 +89,8 @@ def test_the_false_match_detector_actually_detects_a_false_match() -> None:
     )
     dropped = victim.record_ids[-1]
     corrupted.exceptions.append(
-        identity.ReconException(
-            exception_type=identity.EX_UNCLASSIFIED,
+        results.ReconException(
+            exception_type=results.EX_UNCLASSIFIED,
             layer=1,
             record_ids=(dropped,),
             amount_at_risk_paise=0,
@@ -137,7 +137,7 @@ def test_a_record_cannot_be_both_matched_and_excepted() -> None:
     )
     # Swap a member for one already accounted as an exception: the count stays identical, so
     # only the disjointness check can catch this.
-    corrupted.groups[0] = identity.MatchGroup(
+    corrupted.groups[0] = results.MatchGroup(
         group_id=victim.group_id,
         layer=victim.layer,
         record_ids=victim.record_ids[:-1] + (already_excepted,),
@@ -155,9 +155,9 @@ def test_matching_an_unmatchable_record_counts_as_a_false_match() -> None:
     """The other half of the rule: an unmatchable record's true group is empty, so matching
     it fails set equality with no special case."""
     truth = GroundTruth(record_labels=[], settlement_labels=[])
-    result = identity.LayerResult(
+    result = results.LayerResult(
         groups=[
-            identity.MatchGroup(
+            results.MatchGroup(
                 group_id="grp_x",
                 layer=1,
                 record_ids=("gw_1",),

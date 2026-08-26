@@ -6,16 +6,17 @@ this file wins.
 
 > ## Next action
 >
-> **Phase 3 — settlement decomposition. The hardest algorithmic piece.**
+> **Phase 4 — fuzzy matching and global assignment.**
 >
-> Layer 1's baseline is **50.7%** and it hands Layer 2 exactly 12 candidate batches with a
-> non-zero δ, each carrying its δ and its pool. Build order: balance-identity fast path →
-> bounded subset search → the `AMBIGUOUS` refusal with §4.2 evidence.
+> Layer 2 leaves **158 exceptions**, of which the tractable targets are: 46 merchant/gateway
+> rows needing candidate generation with amount tolerance and date windows, and pathology 7's
+> 4 records that must come out `AMBIGUOUS`. Build order: candidate generation → cost matrix →
+> `scipy.optimize.linear_sum_assignment` → the ambiguity margin.
 >
-> The three outcomes Phase 3 must demonstrate on **both** datasets, all guaranteed present by
-> the mechanism floors: Layer 2 succeeding (M1/M2), refusing when several subsets close δ
-> (M5, ≥2 cases, one exceeding the evidence cap), and exhausting its budget honestly (M6,
-> pool of 44). A bounded search that only ever succeeds has not demonstrated its bound.
+> Two hard requirements: **never greedy** (D-0002 — greedy starves correct pairings and
+> inflates false matches), and the false-match rate must be reported before *and* after, on the
+> same data. `UNCLASSIFIED` ceiling drops to **9** and activates automatically when
+> `harness.PHASE` becomes 4.
 >
 > `docs/SPEC.md` is **frozen**. Changing it needs a `DECISIONS.md` entry and approval.
 >
@@ -169,7 +170,21 @@ mutation test exposed.
 
 ---
 
-## Phase 3 — settlement decomposition · TODO
+## Phase 3 — settlement decomposition · **PASS** (2026-08-26)
+
+**Gate evidence.** `215 passed, 0 skipped`. Ablation on identical data: **50.7% → 66.9%,
++16.1pp**, false matches **0.00% on both arms**, `UNCLASSIFIED` **193 → 4**.
+
+| Mechanism | Batches | Outcome |
+|---|---|---|
+| M1 export cutoff skew | 3 | **resolved 3** |
+| M2 on-hold release, misdated | 2 | **resolved 2** — the staged window had to widen past T+2, which is the signal |
+| M4 duplicate reference | 2 | resolved 2, at Layer 1 |
+| M5 multiple subsets | 2 | **refused 2** — `AMBIGUOUS`, evidence recorded, truncation visible |
+| M6 beyond node budget | 1 | **exhausted 1** — `SUBSET_SEARCH_EXHAUSTED` |
+| M3 unparseable UTR | 2 | `MISSING_BANK_ROW` — Layer 4's job (over-broad, see Phase 5) |
+
+Ledger byte-identical across processes and under `PYTHONHASHSEED` 0 / 12345 / random.
 
 The hardest algorithmic piece.
 

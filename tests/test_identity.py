@@ -8,6 +8,7 @@ Layer 1 that just joins would score better and mean less.
 from __future__ import annotations
 
 from core import identity
+from core import results
 from core.normalize import NormalizedDataset
 from core.records import BankRow, GatewayRow, MerchantLedgerRow
 
@@ -88,13 +89,13 @@ def test_a_batch_with_no_bank_credit_is_absence_not_a_search() -> None:
     result = identity.resolve(dataset(gateway=[payment("gw_1", 10_000)], bank=[]))
 
     assert not result.candidates, "a missing credit was handed to Layer 2 as if searchable"
-    assert [e.exception_type for e in result.exceptions] == [identity.EX_MISSING_BANK_ROW]
+    assert [e.exception_type for e in result.exceptions] == [results.EX_MISSING_BANK_ROW]
 
 
 def test_a_bank_credit_with_no_batch_is_reported() -> None:
     result = identity.resolve(dataset(gateway=[], bank=[credit_row("bk_1", 10_000)]))
 
-    assert [e.exception_type for e in result.exceptions] == [identity.EX_MISSING_GATEWAY_ROW]
+    assert [e.exception_type for e in result.exceptions] == [results.EX_MISSING_GATEWAY_ROW]
 
 
 def test_a_duplicate_reference_is_disambiguated_by_value_date() -> None:
@@ -137,7 +138,7 @@ def test_a_duplicate_reference_with_colliding_dates_is_refused() -> None:
 
     assert not result.groups, "picked one of two indistinguishable credits"
     types = {e.exception_type for e in result.exceptions}
-    assert types == {identity.EX_DUPLICATE_REFERENCE}
+    assert types == {results.EX_DUPLICATE_REFERENCE}
 
 
 def test_pool_rows_are_reported_as_the_search_space_not_matched() -> None:

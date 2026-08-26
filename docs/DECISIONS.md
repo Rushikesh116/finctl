@@ -420,3 +420,106 @@ The visible cost is the headline: the Phase 2 baseline is **50.7%**, not the ~85
 anticipates. That is the honest number for a pathology-dense dataset under a verifying Layer 1,
 and it leaves the headroom for Layers 2–4 to earn rather than borrowing it up front.
 *2026-08-26*
+
+---
+
+## D-0019 — the node budget is the deterministic bound; the wall clock is a liveness guard
+
+**Context.** The brief requires Layer 2's search to be bounded by "a node budget and a
+wall-clock timeout, both configurable". Invariant 4 requires the same seed and input to produce
+a byte-identical audit log.
+
+**These two requirements are in tension**, and the tension is not resolvable by wishing. A
+wall-clock timeout fires at a machine-dependent point, so a run that hits it produces different
+solutions — and therefore a different audit log — on a faster or slower machine.
+
+**Decision.** Both bounds exist, but they are not peers:
+
+- **The node budget is the bound that produces results.** It is deterministic: the same input
+  explores the same nodes in the same order and stops at the same place.
+- **The wall clock is a liveness guard** against a pathological instance, sized so it should
+  never fire. If it does, that run is not replayable, and the exception detail says which bound
+  stopped it (`limit_hit`) so the audit trail never claims reproducibility it does not have.
+
+Verified: with a 200k node budget the largest instance in either dataset finishes in ~25ms
+against a 2000ms timeout, so the clock has two orders of magnitude of headroom and the node
+budget always bites first. The ledger is byte-identical across processes and under
+`PYTHONHASHSEED` 0, 12345 and random.
+
+**Alternative rejected.** *Drop the wall clock entirely* — it satisfies determinism but leaves
+no protection against an instance where node accounting itself is slow. A guard that should
+never fire is cheap; not having one is not. *2026-08-26*
+
+---
+
+## D-0020 — the hardness knob for M6 is the true subset's size, not the pool's
+
+**Context.** M6 exists so `SUBSET_SEARCH_EXHAUSTED` appears in every run. Phase 1 encoded its
+hardness as a large *pool* (40–48 rows), and a Phase 1 test asserted `pool_rows_min >= 40` with
+the reasoning that anything smaller would fall to meet-in-the-middle.
+
+**That reasoning was wrong, and Phase 3 measured it.** A search that deepens by subset size
+found M6's 3-row explanation among 44 candidates in ~14k nodes. M6 was *resolving*, dev had zero
+exhausted cases, and the bound was going untested — the exact failure the mechanism was created
+to prevent.
+
+**Decision.** The hardness knob is `delta_rows_min/max = 12..18`: the size of the subset that
+actually explains δ. Iterative deepening must exhaust every smaller size first, and sizes 1–4
+over 44 candidates already cost ~150k combinations, so a 12-row answer is unreachable under any
+plausible budget. Pool size stays as a secondary contributor.
+
+**Consequence.** Both datasets were regenerated and `DATASET_HASHES.txt` updated, so the Phase 2
+metrics row measures different data from the Phase 3 row. That is exactly what the Dataset SHA
+column exists to make visible, and it is why the ablation table re-runs every arm on the current
+data instead of quoting a remembered number.
+
+**The general lesson, worth keeping:** for subset-sum, the search space that matters is not the
+number of candidates but the depth at which the answer sits. A test asserting the wrong knob
+passed happily for two phases. *2026-08-26*
+
+---
+
+## D-0021 — the minimal-size explanation wins, and says so
+
+**Context.** Enumerating every subset that closes δ across all sizes is intractable at ~70
+candidates. Something has to give.
+
+**Decision.** Iterative deepening by subset size, and **the smallest size that yields any
+solution wins**; larger sizes are then not searched. Ties at that size are ambiguity, not a
+choice — equally-sized alternatives are equally plausible.
+
+**Why this is a prior and not a shortcut.** The smallest set of rows that accounts for δ is the
+plausible explanation; a larger set that also happens to sum to δ is a coincidence. That is how
+a human reconciler reads it. Validated against ground truth on every resolvable batch in both
+datasets: the minimal solution is always either uniquely the true one, or tied with alternatives
+that genuinely are ambiguous. **Zero false matches resulted.**
+
+The claim is nonetheless weaker than "exhaustively unique", so `larger_sizes_unsearched` records
+when it was applied and the group's audit detail carries it. An audit trail that overstates its
+own certainty is worse than one that admits a prior.
+
+**Alternative rejected.** *Search all sizes to the cap before deciding* — sound, and
+intractable: it is what made the first implementation exhaust on 6 of 8 batches while finding
+nothing. *2026-08-26*
+
+---
+
+## D-0022 — `core/verifier.py` lands in Phase 3, not Phase 5
+
+**Context.** The brief introduces the verifier alongside the LLM in Phase 5, described as the
+module that re-checks LLM proposals. It is also described as "the only module permitted to
+approve a match".
+
+**Decision.** Build it in Phase 3 and route **both** deterministic layers through it. Layers 1
+and 2 now emit `GroupProposal`; only `verifier.verify` produces a `MatchGroup`.
+
+**Why earlier.** A verifier retrofitted after two layers already approve directly is a verifier
+with holes, and the holes are exactly the paths that predate it. Routing the deterministic
+layers through it first means the Phase 5 LLM path is *just another proposer* — no new trust
+granted, no special case to audit, and the claim "a hallucinated match cannot enter the ledger"
+becomes structural rather than a promise about one code path.
+
+The verifier therefore trusts no proposer, including the ones that cannot lie. It recomputes the
+identity from the records and ignores whatever the proposing layer calculated, so a layer that
+miscalculates its own δ cannot get a group approved on the strength of its own mistake — which
+is a test, not a hypothetical. *2026-08-26*

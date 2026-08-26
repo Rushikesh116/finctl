@@ -23,8 +23,8 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 2 complete. Baseline recorded at 50.7% auto-match, 0.00% false
-matches. Next is Phase 3 — bounded settlement decomposition.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
+**Current phase: Phase 3 complete. 66.9% auto-match, 0.00% false matches, all three
+Layer 2 outcomes demonstrated. Next is Phase 4 — fuzzy matching and global assignment.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
 wins.
 
 ---
@@ -164,7 +164,7 @@ The cascade, each layer handing on only what it could not resolve:
 | Layer | Module | Job |
 |---|---|---|
 | 1 | `core/identity.py` | Exact match on bank reference, payment id, order id |
-| 2 | `core/settlement.py` | Check the balance identity; if δ ≠ 0, **bounded** subset search for δ |
+| 2 | `core/settlement.py` | Check the balance identity; if δ ≠ 0, **bounded** subset search for δ. Iterative deepening by subset size; minimal explanation wins; ties are refusals (D-0021) |
 | 3 | `core/assignment.py` | Candidate generation, then `linear_sum_assignment` for a globally optimal one-to-one assignment. Refuse to match when best and second-best fall within the margin |
 | 4 | `core/adjudicate.py` | LLM on the residue (target < 5%): parse narration, classify, explain — always behind `core/verifier.py` |
 

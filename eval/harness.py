@@ -11,24 +11,25 @@ Whatever this prints is what ships. Nothing here is tuned to hit a number.
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from audit.ledger import AuditLedger, verify_chain
-from core import identity
+from core import identity, settlement
 from core.money import format_rupees
 from core.normalize import NormalizedDataset, load_dataset
 from data.generator import DATASET_SEEDS, dataset_paths
 from eval.groundtruth import GroundTruth, load_ground_truth
 from eval.provenance import RunProvenance, capture
 
-PHASE = 2
+PHASE = 3
 
 # Layers that exist. Printed alongside the ones that do not, so the block never implies
 # coverage from a layer that has not been written.
-BUILT_LAYERS = {1: "exact"}
-PLANNED_LAYERS = {2: "netting", 3: "fuzzy", 4: "LLM+verified"}
+BUILT_LAYERS = {1: "exact", 2: "netting"}
+PLANNED_LAYERS = {3: "fuzzy", 4: "LLM+verified"}
 
 # What happened to a δ != 0 batch. Reported per mechanism, because "Layer 2 resolves M1 but
 # not M2" is the diagnostic and a single netting aggregate hides it entirely.
@@ -118,8 +119,18 @@ def absorb_unresolved(data: NormalizedDataset, result: identity.LayerResult) -> 
     return len(leftover)
 
 
-def evaluate(dataset_name: str, *, db_path: Path | None = None) -> Metrics:
-    """Run the cascade over one dataset and measure it against ground truth."""
+def evaluate(
+    dataset_name: str, *, db_path: Path | None = None, max_layer: int = max(BUILT_LAYERS)
+) -> Metrics:
+    """Run the cascade over one dataset and measure it against ground truth.
+
+    `max_layer` stops the cascade early, which is how the ablation table is produced: each arm
+    is a real run on the *same* data, not a remembered number from an earlier phase. That
+    matters because the datasets themselves change between phases (D-0020 moved M6's hardness
+    knob and regenerated both), so a cross-phase comparison of headline rates would be
+    comparing different inputs — which is precisely what the dataset SHA column exists to make
+    visible.
+    """
     paths = dataset_paths(dataset_name)
     provenance = capture(dataset_name)
 
@@ -128,6 +139,29 @@ def evaluate(dataset_name: str, *, db_path: Path | None = None) -> Metrics:
         merchant=paths["merchant"], gateway=paths["gateway"], bank=paths["bank"]
     )
     result = identity.resolve(data)
+
+    # Layer 2 receives exactly what Layer 1 could not settle — batches that joined but did not
+    # balance, plus the unassigned pool it may draw on. Nothing else crosses the boundary.
+    if max_layer >= settlement.LAYER:
+        result.merge(
+            settlement.resolve(
+                data,
+                result.candidates,
+                result.pool_row_ids,
+                node_budget=int(
+                    os.environ.get("FINCTL_SUBSET_NODE_BUDGET", settlement.DEFAULT_NODE_BUDGET)
+                ),
+                timeout_ms=int(
+                    os.environ.get("FINCTL_SUBSET_TIMEOUT_MS", settlement.DEFAULT_TIMEOUT_MS)
+                ),
+                max_evidence=int(
+                    os.environ.get(
+                        "FINCTL_AMBIGUOUS_SUBSETS_RECORDED_MAX",
+                        settlement.DEFAULT_MAX_EVIDENCE,
+                    )
+                ),
+            )
+        )
 
     absorb_unresolved(data, result)
     elapsed_us = int((time.perf_counter() - started) * 1_000_000)
@@ -162,18 +196,30 @@ def _write_ledger(result: identity.LayerResult, db_path: Path | None) -> AuditLe
             layer=identity.LAYER,
             decision="hand_on",
             record_ids=candidate.member_row_ids,
-            outcome="needs_layer_2",
+            outcome="needs_layer_3",
             confidence=0,
             detail=f"delta {candidate.delta_paise} paise against {candidate.bank_row_id}",
         )
     for exception in sorted(result.exceptions, key=lambda e: (e.exception_type, e.record_ids)):
+        detail = exception.detail
+        if exception.evidence_found:
+            # The evidence is part of the decision, so it belongs in the hash-chained record
+            # and not only in the rendered block.
+            shown = "; ".join(
+                f"[{'+'.join(e.row_ids)}]={e.sum_paise}" for e in exception.evidence
+            )
+            detail += (
+                f" | evidence {len(exception.evidence)}/{exception.evidence_found}"
+                f"{' (truncated)' if exception.evidence_truncated else ''}"
+                f"{'' if exception.evidence_complete else ' (count is a lower bound)'}: {shown}"
+            )
         ledger.record(
             layer=exception.layer,
             decision="raise_exception",
             record_ids=exception.record_ids,
             outcome=exception.exception_type,
             confidence=100,
-            detail=exception.detail,
+            detail=detail,
         )
 
     verify_chain(ledger.entries)
@@ -285,7 +331,12 @@ def _score(
         )
         tallies["batches"] += 1
 
-        members = list(settlement.true_member_row_ids)
+        # Attribute on the batch's OWN rows, excluding its pool rows. A batch-level exception
+        # covers the joined members; its pool rows may land in a different exception entirely
+        # (a pending row goes to TIMING_OUTSIDE_WINDOW), and letting those outvote the batch's
+        # own verdict reported M6 as "pending" when it had in fact exhausted its budget.
+        pool = set(settlement.pool_row_ids)
+        members = [r for r in settlement.true_member_row_ids if r not in pool]
         if members and all(
             row_id in engine_group
             and engine_group[row_id] == true_groups.get(row_id, frozenset())
@@ -415,17 +466,43 @@ def render(metrics: Metrics) -> str:
     return "\n".join(lines)
 
 
-def render_ablation(metrics: Metrics) -> str:
-    """The ablation table. One real arm in Phase 2; the rest are named, not faked."""
+ABLATION_ARMS = ((1, "exact only (L1)"), (2, "+ netting (L2)"))
+
+
+def render_ablation(dataset_name: str) -> str:
+    """The ablation table. Every arm is a **real run on the same data**, not a recalled number.
+
+    Arms are re-run rather than compared across phases because the datasets change between
+    phases: D-0020 moved M6's hardness knob and regenerated both, so a Phase 2 headline is not
+    comparable to a Phase 3 one. Re-running is the only way the deltas mean anything.
+    """
     lines = [
         "",
-        "Ablation                    auto-match   false-match   exceptions",
-        f"  deterministic (L1+L2)     {_percent(metrics.auto_matched, metrics.n):>10}   "
-        f"{_percent(metrics.false_matches, metrics.auto_matched, 2):>11}   "
-        f"{metrics.exception_records:>10}   <- L1 only; L2 not built",
-        "  + fuzzy (L3)                      --            --           --   not built",
-        "  + LLM (L4)                        --            --           --   not built",
+        "Ablation (same dataset, layers enabled cumulatively)",
+        "  arm                  auto-match   false-match   exceptions   UNCLASSIFIED",
     ]
+    previous: Metrics | None = None
+    for ceiling, label in ABLATION_ARMS:
+        arm = evaluate(dataset_name, max_layer=ceiling)
+        delta = ""
+        if previous is not None:
+            change = 100 * (arm.auto_matched - previous.auto_matched) / arm.n
+            delta = f"   {change:+.1f}pp"
+        lines.append(
+            f"  {label:<20}{_percent(arm.auto_matched, arm.n):>10}   "
+            f"{_percent(arm.false_matches, arm.auto_matched, 2):>11}   "
+            f"{arm.exception_records:>10}   {arm.unclassified_records:>12}{delta}"
+        )
+        previous = arm
+    for layer, name in sorted(PLANNED_LAYERS.items()):
+        label = f"+ {name} (L{layer})"
+        lines.append(
+            f"  {label:<20}{'--':>10}   {'--':>11}   {'--':>10}   {'--':>12}   not built"
+        )
+    lines.append(
+        "  False-match rate is reported on every arm: an arm that raises coverage while also"
+    )
+    lines.append("  raising false matches is a regression being sold as an improvement.")
     return "\n".join(lines)
 
 
@@ -451,7 +528,7 @@ def main(argv: list[str] | None = None) -> int:
     metrics = evaluate(args.dev, db_path=args.db)
     print(render(metrics))
     if args.ablation:
-        print(render_ablation(metrics))
+        print(render_ablation(args.dev))
 
     if args.holdout:
         print()

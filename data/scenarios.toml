@@ -162,6 +162,16 @@ min_instances = 1
 pool_rows_min = 40
 pool_rows_max = 48
 
+# THE ACTUAL HARDNESS KNOB, corrected in Phase 3 after measurement (D-0020).
+#
+# Pool size alone does not make subset-sum hard: a competent search that deepens by subset
+# size finds a 3-row explanation among 44 candidates in ~14k nodes, and M6 was *resolving*.
+# What makes it hard is the size of the TRUE subset, because every smaller size must be
+# exhausted first. Sizes 1-4 over 44 candidates cost ~150k combinations; a true subset of 12+
+# means the budget is spent long before the answer is reachable.
+delta_rows_min = 12
+delta_rows_max = 18
+
 
 # ---------------------------------------------------------------------------------------
 # The twelve pathologies. All twelve must appear at least twice in BOTH datasets

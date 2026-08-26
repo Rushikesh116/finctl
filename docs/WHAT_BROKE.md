@@ -105,3 +105,75 @@ cannot express both properties.
 **Metric before → after.** Baseline unchanged at 50.7% / 0.00% / 235 — the real run was never
 in the failing state. What changed is that the check can now detect it, verified by
 `tests/test_harness.py::test_a_record_cannot_be_both_matched_and_excepted`.
+
+---
+
+## 2026-08-26 — the subset search double-counted solutions, manufacturing false ambiguity
+
+**Symptom.** Layer 2 reported `AMBIGUOUS` with `found=2` for a batch whose δ was uniquely
+determined. Printing the two subsets showed them to be **the same subset, listed twice**.
+
+**Diagnosis.** Solutions were counted mid-descent: on reaching `remaining == 0` the code recorded
+a solution and deliberately kept descending, to catch supersets containing a zero-net row. But
+every subsequent "skip this row" node also sees `remaining == 0` and scores the same subset
+afresh, so a completed solution was counted once for every index after it.
+
+**Why this was the worst possible direction to be wrong in.** `AMBIGUOUS` scores as a
+*success* — a principled refusal (D-0014). So the bug converted resolvable batches into
+apparent good behaviour: coverage fell, "refused" rose, and every headline number still looked
+defensible. A metric-shaped bug that flatters the system is far harder to notice than one that
+breaks it.
+
+**Fix.** Count at the leaf, once per distinct include/exclude assignment. Locked by
+`tests/test_settlement.py::test_solutions_are_never_double_counted`.
+
+**Metric before → after.** Layer 2 on dev: 2 resolved / 3 refused → **6 resolved / 2 refused**,
+with the refusals now being the two genuine M5 cases. Auto-match 50.7% → 62.7% at that step.
+
+---
+
+## 2026-08-26 — M6 was not hard, so the bounded search was never demonstrated stopping
+
+**Symptom.** After the search was made competent, `pool_beyond_node_budget` **resolved** on dev.
+Dev had zero exhausted cases, so `SUBSET_SEARCH_EXHAUSTED` appeared nowhere and the stopping
+rule — the thing the brief specifically asks for — was untested.
+
+**Diagnosis.** Phase 1 encoded M6's hardness as a large *pool* and asserted `pool_rows_min >= 40`
+on the reasoning that less would fall to meet-in-the-middle. Wrong knob. For subset-sum with
+iterative deepening, cost is driven by the **depth at which the answer sits**, not the number of
+candidates: a 3-row answer among 44 candidates is ~14k nodes.
+
+**Fix.** `delta_rows_min/max = 12..18` (D-0020). Reaching a 12-row answer means exhausting sizes
+1–11 first, which is ~10^9 combinations. The Phase 1 test was rewritten to assert the right
+property, and it now computes the combinatorial cost rather than eyeballing a pool size.
+
+**Metric before → after.** `SUBSET_SEARCH_EXHAUSTED` on dev: **absent → 1 batch**, present in
+both datasets. Datasets regenerated, so `DATASET_HASHES.txt` changed and the Phase 2 metrics row
+is no longer comparable — visible in the Dataset SHA column, which is why that column exists.
+
+**Uncomfortable part worth stating.** The wrong assertion passed for two phases and read as
+rigorous while doing nothing. A test that asserts the wrong property is worse than no test,
+because it buys confidence it has not earned.
+
+---
+
+## 2026-08-26 — a record ended up both matched and excepted
+
+**Symptom.** The partition invariant's disjointness check fired: `gw_000200` was in a match group
+and in an exception simultaneously.
+
+**Diagnosis.** Making `AMBIGUOUS` name the rows the ambiguity is *about* introduced it. Naming a
+row does not *claim* it, so a batch processed later could still resolve using that row — and
+batches were processed in a single pass, in settlement-id order.
+
+The deeper issue is that the single pass was simply wrong: resolving a batch removes its rows
+from the pool, which shrinks every other batch's candidate set and can turn an apparently
+ambiguous batch into a uniquely determined one. Order should not decide that.
+
+**Fix.** Resolve to a **fixed point** — repeat the resolve pass until no further batch resolves —
+and only then classify what remains. More correct and strictly more resolving.
+
+**Metric before → after.** Layer 2 on dev: 5 resolved / 3 refused-or-exhausted →
+**6 resolved / 3**, and auto-match 62.7% → **66.9%**. The disjointness check that caught it was
+itself added in Phase 2 after a mutation test exposed the sum-only version as self-cancelling;
+it has now caught a real bug twice.

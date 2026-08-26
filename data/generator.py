@@ -559,8 +559,10 @@ class _Generator:
                 self._payment_row(amount_paise=self._amount(), created_day=capture_day)
                 for _ in range(size)
             ]
-            # δ is explained by a specific subset; finding it is what exceeds the budget.
-            delta_rows = pool[: self.rng.randint(3, 6)]
+            # δ is explained by a specific LARGE subset. Size, not pool size, is what puts it
+            # out of reach: a search deepening by subset size must exhaust every smaller size
+            # first, and sizes 1-4 over 44 candidates already cost ~150k combinations (D-0020).
+            delta_rows = pool[: self.rng.randint(spec["delta_rows_min"], spec["delta_rows_max"])]
 
         # --- the bank credit ------------------------------------------------------------
         joined_rows = [row for row, _ in joined]
