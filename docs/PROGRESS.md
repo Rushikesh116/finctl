@@ -123,12 +123,18 @@ not a perturbation of the data. Determinism re-verified across all four processe
       involved
 - [ ] `eval/harness.py` — prints the full metrics block, even though most layers do not
       exist yet
+- [x] `eval/provenance.py` — git SHA + **dataset SHA** + timestamp per run, with `drift` and
+      `absent` surfaced inline in the header. Landed early because the harness must emit it
+      from its very first run, or the baseline row is unattributable
 
 **Gate:**
 - [ ] `make eval` prints real numbers with only exact matching enabled (expect roughly 85%)
-- [ ] `auto_matched + exception_records == N` asserted
-- [ ] Baseline pasted into `docs/METRICS.md` with command + SHA. **This is what every later
-      improvement is measured against**
+- [ ] `auto_matched + exception_records == N` asserted, **raising** not asserting
+- [ ] The metrics block header carries the dataset SHA from
+      `eval/provenance.capture()`, and prints `!! DRIFT` when disk and manifest disagree
+- [ ] Per-pathology counts print with their overlap caveat on the header line (D-0016)
+- [ ] Baseline pasted into `docs/METRICS.md` with command, git SHA **and dataset SHA**.
+      **This is what every later improvement is measured against**
 
 ---
 

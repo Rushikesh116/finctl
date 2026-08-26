@@ -15,6 +15,30 @@ then measured against a *recorded* baseline instead of a remembered one.
 
 **No number appears in any document unless a command produced it.**
 
+And it carries its provenance. Every metrics row records **three** identifiers, captured by
+`eval/provenance.capture()` before the run starts:
+
+| Identifier | Answers |
+|---|---|
+| **git SHA** | which *code* produced it |
+| **dataset SHA** | which *data* it ran against |
+| timestamp | when |
+
+The dataset SHA is a short digest over that dataset's emitted files, **computed from disk at
+eval time** and then cross-checked against `data/DATASET_HASHES.txt`. Computed from disk, not
+read out of the manifest: if the two disagree, reading the manifest would report stale
+provenance with total confidence, which is the one failure this is meant to catch. The
+mismatch prints inline as `!! DRIFT: manifest says …`, and a missing manifest as
+`!! NO MANIFEST`.
+
+It is **per dataset**, so regenerating the holdout does not invalidate the provenance of every
+dev row.
+
+**A row whose dataset SHA differs from its neighbours is measuring something else and is not
+comparable to them**, however similar the numbers look. That is the whole point: `METRICS.md`
+is append-only and rows are compared across phases, so without this a row from before a
+regeneration is indistinguishable from one after.
+
 - Every metric in `docs/METRICS.md`, `README.md`, or any pitch material is **pasted from
   stdout**, with the command and the git SHA written above it.
 - A result you have not run is written `TBD`. Not an estimate, not "roughly", not a
@@ -138,7 +162,7 @@ inflates the figure by roughly 3×; a reviewer will spot that immediately.
 `docs/METRICS.md` and `README.md`:
 
 ```
-Dataset: holdout_seed_97        SHA: <git sha>      2026-xx-xx xx:xx
+Dataset: holdout_seed_97  data a3cccfd9   SHA: <git sha>   2026-xx-xx xx:xx
 Records processed        512          Wall clock      8.4s
 Auto-matched             478   93.4%   Throughput    61 rec/s
   Layer 1  exact         441   86.1%   LLM calls         14
