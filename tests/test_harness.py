@@ -217,3 +217,84 @@ def test_two_runs_produce_the_same_metrics_and_ledger_head() -> None:
         second.false_matches,
         second.exception_records,
     )
+
+
+# --- per-mechanism reporting and the UNCLASSIFIED trajectory ------------------------------
+
+
+def test_every_mechanism_is_reported_with_its_batch_count() -> None:
+    """"Layer 2 resolves M1 but not M2" is the diagnostic; an aggregate hides it."""
+    import tomllib
+    from pathlib import Path
+
+    with (Path(__file__).resolve().parents[1] / "data" / "scenarios.toml").open("rb") as fh:
+        floors = {n: s["min_instances"] for n, s in tomllib.load(fh)["mechanism"].items()}
+
+    metrics = harness.evaluate(DEV)
+
+    missing = sorted(set(floors) - set(metrics.by_mechanism))
+    assert not missing, f"mechanisms absent from the block: {missing}"
+
+    for name, floor in sorted(floors.items()):
+        assert metrics.by_mechanism[name]["batches"] >= floor, (
+            f"{name}: reported {metrics.by_mechanism[name]['batches']} batches, floor {floor}"
+        )
+
+
+def test_mechanism_outcomes_account_for_every_batch() -> None:
+    """No batch may fall out of the per-mechanism accounting unnoticed."""
+    metrics = harness.evaluate(DEV)
+
+    for name, tallies in sorted(metrics.by_mechanism.items()):
+        counted = sum(value for key, value in tallies.items() if key != "batches")
+        assert counted == tallies["batches"], (
+            f"{name}: outcomes sum to {counted} but there are {tallies['batches']} batches"
+        )
+
+
+def test_refused_and_exhausted_are_distinct_outcomes() -> None:
+    """D-0014: declining is a success, giving up is an honest failure.
+
+    Mapping both to one outcome would let a worse search improve the headline — lower the node
+    budget, time out more, and "refused" would climb while the engine reconciles strictly less.
+    """
+    assert harness.EXCEPTION_OUTCOME["AMBIGUOUS"] == harness.OUTCOME_REFUSED
+    assert harness.EXCEPTION_OUTCOME["SUBSET_SEARCH_EXHAUSTED"] == harness.OUTCOME_EXHAUSTED
+    assert harness.OUTCOME_REFUSED != harness.OUTCOME_EXHAUSTED
+
+
+def test_unclassified_stays_under_the_ceiling_for_the_current_phase() -> None:
+    """Self-activating gate: raising `harness.PHASE` turns on that phase's ceiling.
+
+    Phase 2 has no ceiling — Layers 2-4 do not exist, so everything they would classify is
+    necessarily unclassified. From Phase 3 the ceiling binds, and it cannot be forgotten
+    because it activates on the same edit that starts the phase.
+    """
+    ceiling = harness.UNCLASSIFIED_CEILING.get(harness.PHASE)
+    if ceiling is None:
+        pytest.skip(f"phase {harness.PHASE} has no UNCLASSIFIED ceiling yet")
+
+    metrics = harness.evaluate(DEV)
+    assert metrics.unclassified_records <= ceiling, (
+        f"UNCLASSIFIED holds {metrics.unclassified_records} records, above the phase "
+        f"{harness.PHASE} ceiling of {ceiling}. Every record in this bucket has a home in the "
+        "enum (see docs/PROGRESS.md), so exceeding the ceiling means a layer is not "
+        "classifying what it resolved."
+    )
+
+
+def test_the_unclassified_target_reaches_zero() -> None:
+    """The trajectory must actually end at zero, or the target is decorative."""
+    assert harness.UNCLASSIFIED_CEILING[5] == 0
+    assert harness.UNCLASSIFIED_CEILING[6] == 0
+
+
+def test_a_nonzero_unclassified_count_is_printed_as_a_finding() -> None:
+    """eval-protocol §6: a non-zero count here is a finding, so it must be legible as one."""
+    metrics = harness.evaluate(DEV)
+    if not metrics.unclassified_records:
+        pytest.skip("nothing unclassified, so there is no finding to print")
+
+    rendered = harness.render(metrics)
+    assert "FINDING" in rendered
+    assert "Target" in rendered, "the finding must state what the target is"

@@ -177,6 +177,12 @@ The hardest algorithmic piece.
 - [ ] Bounded subset search for δ: node budget **and** wall-clock timeout, both configurable
 - [ ] Overflow becomes a typed exception (`SUBSET_SEARCH_EXHAUSTED`), never a silent drop
 - [ ] **≥2 distinct closing subsets ⇒ refuse with `AMBIGUOUS`**, carrying the §4.2 evidence
+- [ ] **`UNCLASSIFIED` ≤ 13 records** (from 193). Layer 2 must absorb 180: M1 43, M2 34,
+      M5 42 → `AMBIGUOUS`, M6 20 → `SUBSET_SEARCH_EXHAUSTED`, pool distractors 41 →
+      `TIMING_OUTSIDE_WINDOW`. Enforced by a ceiling test that activates when `harness.PHASE`
+      becomes 3
+- [ ] **Per-mechanism outcomes in the metrics block**, not only in tests: resolved / refused /
+      exhausted / unclassified per δ mechanism, on both datasets
 - [ ] Every subset an `AMBIGUOUS` exception records independently sums to δ (§4.2 rule 1)
 - [ ] Truncation is visible: true `subsets_found` plus a `truncated` flag, never a silent cap
 - [ ] The engine finds **all** closing subsets before refusing — finding 2 of 21 and refusing
@@ -201,6 +207,7 @@ The hardest algorithmic piece.
 **Gate:**
 - [ ] Pathology 7 produces an `AMBIGUOUS` exception, **not a match**
 - [ ] False-match rate reported **before and after** this phase
+- [ ] **`UNCLASSIFIED` ≤ 9 records** — Layer 3 absorbs pathology 7's 4 into `AMBIGUOUS`
 
 ---
 
@@ -219,6 +226,14 @@ Layer 4 sees only what survived Layers 1–3 — target **under 5%** of the batc
       retries, per-call cost accounting, every response cached to `fixtures/llm/` by prompt
       hash. All source text treated as untrusted
 - [ ] No `temperature` parameter — it returns HTTP 400 on the default model (D-0004)
+- [ ] **`UNCLASSIFIED` == 0.** Layer 4's second job *is* classification: dispute legs →
+      `DISPUTE_UNRESOLVED`, later-cycle refunds → `TIMING_OUTSIDE_WINDOW`, orphan adjustments
+      → `UNEXPLAINED_ADJ`. Any residue is itemised record by record, never left in the bucket
+- [ ] **Split `MISSING_BANK_ROW` from `UNPARSEABLE_NARRATION`.** Layer 1 cannot distinguish
+      "no credit exists" from "a credit exists but its reference is unparseable" — both look
+      identical to an exact-match layer, and the Phase 2 block shows M3 reporting
+      `MISSING_BANK_ROW 2` for credits that are sitting right there with unreadable
+      narration. Reading narration is Layer 4's job, so the split belongs here
 
 **Gate:**
 - [ ] `DEMO_MODE=1 make eval` completes with the **network disabled**, fixtures only

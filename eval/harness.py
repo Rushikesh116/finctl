@@ -30,6 +30,28 @@ PHASE = 2
 BUILT_LAYERS = {1: "exact"}
 PLANNED_LAYERS = {2: "netting", 3: "fuzzy", 4: "LLM+verified"}
 
+# What happened to a δ != 0 batch. Reported per mechanism, because "Layer 2 resolves M1 but
+# not M2" is the diagnostic and a single netting aggregate hides it entirely.
+OUTCOME_RESOLVED = "resolved"
+OUTCOME_REFUSED = "refused"
+OUTCOME_EXHAUSTED = "exhausted"
+OUTCOME_UNCLASSIFIED = "unclassified"
+OUTCOME_ORDER = (OUTCOME_RESOLVED, OUTCOME_REFUSED, OUTCOME_EXHAUSTED, OUTCOME_UNCLASSIFIED)
+
+# An exception type maps to exactly one outcome. `AMBIGUOUS` is a *success* — declining when
+# the data does not determine the answer — while `SUBSET_SEARCH_EXHAUSTED` is an honest
+# failure. Conflating them would let a worse search improve the headline (D-0014).
+EXCEPTION_OUTCOME = {
+    "AMBIGUOUS": OUTCOME_REFUSED,
+    "SUBSET_SEARCH_EXHAUSTED": OUTCOME_EXHAUSTED,
+    "UNCLASSIFIED": OUTCOME_UNCLASSIFIED,
+}
+
+# UNCLASSIFIED is an escape hatch, and eval-protocol §6 says a non-zero count is a finding.
+# Every record currently in it has a home in the enum, so the end state is zero. These are the
+# per-phase ceilings that trajectory implies — see docs/PROGRESS.md.
+UNCLASSIFIED_CEILING = {2: None, 3: 13, 4: 9, 5: 0, 6: 0}
+
 
 @dataclass
 class Metrics:
@@ -49,6 +71,8 @@ class Metrics:
     per_pathology: dict[int, tuple[int, int]] = field(default_factory=dict)
     llm_calls: int = 0
     cost_micros_usd: int = 0
+    by_mechanism: dict[str, dict[str, int]] = field(default_factory=dict)
+    unclassified_records: int = 0
     ledger_entries: int = 0
     ledger_head: str = ""
 
@@ -239,6 +263,45 @@ def _score(
             "block would be computed over a subset it did not disclose."
         )
 
+    metrics.unclassified_records = metrics.by_type.get(identity.EX_UNCLASSIFIED, 0)
+
+    # --- per mechanism -------------------------------------------------------------------
+    # Ground-truth attribution: SettlementLabel.mechanism says which δ mechanism a batch
+    # exhibits, so the block can report Layer 2's behaviour per mechanism rather than as one
+    # netting aggregate. `mechanism` is scoring metadata, never visible to the matcher.
+    outcome_by_row: dict[str, str] = {}
+    for exception in result.exceptions:
+        outcome = EXCEPTION_OUTCOME.get(exception.exception_type, exception.exception_type)
+        for row_id in exception.record_ids:
+            # A more specific classification always beats UNCLASSIFIED.
+            if outcome_by_row.get(row_id) in (None, OUTCOME_UNCLASSIFIED):
+                outcome_by_row[row_id] = outcome
+
+    for settlement in truth.settlement_labels:
+        if not settlement.mechanism:
+            continue
+        tallies = metrics.by_mechanism.setdefault(
+            settlement.mechanism, {"batches": 0, **{k: 0 for k in OUTCOME_ORDER}}
+        )
+        tallies["batches"] += 1
+
+        members = list(settlement.true_member_row_ids)
+        if members and all(
+            row_id in engine_group
+            and engine_group[row_id] == true_groups.get(row_id, frozenset())
+            for row_id in members
+        ):
+            tallies[OUTCOME_RESOLVED] += 1
+            continue
+
+        observed = sorted({outcome_by_row.get(row_id, OUTCOME_UNCLASSIFIED) for row_id in members})
+        specific = [o for o in observed if o != OUTCOME_UNCLASSIFIED]
+        outcome = specific[0] if specific else OUTCOME_UNCLASSIFIED
+        # An outcome outside the four canonical ones is recorded under its own exception
+        # type rather than swept into an "other" bucket. A count with no name cannot be
+        # acted on, and this is exactly where a surprising classification shows up.
+        tallies[outcome] = tallies.get(outcome, 0) + 1
+
     # --- per pathology ------------------------------------------------------------------
     tally: dict[int, list[int]] = {}
     for label in truth.record_labels:
@@ -305,9 +368,40 @@ def render(metrics: Metrics) -> str:
         f"Cost / 1000        {'Rs TBD':>10}          "
         f"USD {metrics.cost_micros_usd / 1_000_000:.6f} total",
         f"Audit ledger       {metrics.ledger_entries:>10} entries   head {metrics.ledger_head[:12]}",
-        "By pathology  (records carry >=1, so these OVERLAP and do not sum to "
-        f"{metrics.n})",
     ]
+
+    if metrics.by_mechanism:
+        lines.append(
+            "By mechanism  (delta != 0 batches; ground-truth attribution. refused is a "
+            "SUCCESS, exhausted is an honest failure)"
+        )
+        for name in sorted(metrics.by_mechanism):
+            t = metrics.by_mechanism[name]
+            extras = sorted(k for k in t if k not in OUTCOME_ORDER and k != "batches")
+            lines.append(
+                f"  {name:<34}{t['batches']:>2} batch"
+                f"{'es' if t['batches'] != 1 else '  '}  "
+                + "  ".join(f"{key} {t[key]}" for key in OUTCOME_ORDER)
+                + ("  " + "  ".join(f"{k} {t[k]}" for k in extras) if extras else "")
+            )
+
+    if metrics.unclassified_records:
+        ceiling = UNCLASSIFIED_CEILING.get(PHASE)
+        target = "0 by Phase 5" if ceiling is None else f"<= {ceiling} at this phase, 0 by Phase 5"
+        lines.append(
+            f"FINDING  UNCLASSIFIED holds {metrics.unclassified_records} records "
+            f"({_percent(metrics.unclassified_records, metrics.exception_records)} of "
+            f"exceptions). Target {target}."
+        )
+        lines.append(
+            "         Every record in it has a home in the enum; the count is a measure of "
+            "layers not yet built, not of records that defy classification."
+        )
+
+    lines.append(
+        "By pathology  (records carry >=1, so these OVERLAP and do not sum to "
+        f"{metrics.n})"
+    )
 
     row = "  "
     for index, (pathology, (correct, total)) in enumerate(metrics.per_pathology.items(), 1):

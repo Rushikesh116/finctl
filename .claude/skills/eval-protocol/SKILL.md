@@ -49,9 +49,15 @@ regeneration is indistinguishable from one after.
 ## 2. Running it
 
 ```bash
-make eval                     # dev + holdout + ablation; prints the metrics block
+make eval                     # dev dataset + ablation; prints the metrics block
+make eval-holdout             # Phase 6 ONLY, once. Deliberately a separate target
 DEMO_MODE=1 make eval         # fixtures only: no network, no API key required
 ```
+
+`make eval` does **not** touch the holdout. It used to, via a `--holdout` flag written into the
+Phase 0 Makefile before the harness existed; the flag sat inert for two phases while three
+documents stated the once-only rule. A rule enforced only by documentation is not enforced. See
+`docs/WHAT_BROKE.md`.
 
 `DEMO_MODE=1 make eval` **must** complete with the network disabled. If it needs a key,
 the fixture cache is incomplete and that is a bug, not an excuse.
@@ -214,6 +220,48 @@ SPEC freeze.
 
 `SUBSET_SEARCH_EXHAUSTED` must always be **visible**. A bounded search that silently
 drops overflow is worse than an unbounded one, because it looks like it worked.
+
+### `UNCLASSIFIED` must reach zero
+
+The exception queue *is* the deliverable — the track bar asks for "an honest exception list" —
+and an exception typed `UNCLASSIFIED` tells an operator nothing they can act on. So the target
+is **zero**, and it is not aspirational: every record in the Phase 2 bucket has an identified
+home in the enum, itemised in `docs/PROGRESS.md`.
+
+| Phase | Ceiling | What absorbs the difference |
+|---|---|---|
+| 2 | — (no layer can classify) | baseline: 193 of 235 exceptions |
+| 3 | **≤ 13** | Layer 2 takes 180: M1/M2 resolved, M5 `AMBIGUOUS`, M6 `SUBSET_SEARCH_EXHAUSTED`, pool distractors `TIMING_OUTSIDE_WINDOW` |
+| 4 | **≤ 9** | Layer 3 takes pathology 7 → `AMBIGUOUS` |
+| 5 | **0** | Layer 4's second job *is* classification: dispute legs, later-cycle refunds, orphan adjustments |
+| 6 | **0** | |
+
+The ceiling is enforced by `tests/test_harness.py`, which reads `harness.PHASE` — so it
+activates on the same edit that starts a phase and cannot be forgotten. A non-zero count prints
+as a `FINDING` line stating the target, because a number that is expected to be zero must not
+be able to sit quietly in a table.
+
+### Per-mechanism reporting is mandatory from Phase 3
+
+`Layer 2 resolved 24 records` is not a finding. **`Layer 2 resolves M1 but not M2` is.** A
+single netting aggregate averages away exactly the signal that says which mechanism is
+unhandled, so the block reports every δ mechanism separately, attributed from
+`SettlementLabel.mechanism`:
+
+```
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0
+```
+
+`refused` and `exhausted` are separate columns and must never be merged (D-0014): a metric that
+counts giving up as declining rewards a *worse* search — drop the node budget, time out more
+often, and the "refused" column climbs while the engine reconciles strictly less.
+
+An outcome outside the four canonical columns is printed under **its own exception type**, not
+swept into an "other" bucket. A count with no name cannot be acted on, and that column is
+precisely where a surprising classification shows up.
 
 ## 7. Cost accounting
 

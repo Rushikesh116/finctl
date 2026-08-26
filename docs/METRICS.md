@@ -13,13 +13,13 @@ The number every later phase is measured against. Recorded before anything was t
 
 ```
 $ git rev-parse --short HEAD
-a2687b1
+ab178c5
 $ date -u '+%Y-%m-%d %H:%M UTC'
-2026-08-26 15:48 UTC
+2026-08-26 15:57 UTC
 $ make eval
-Dataset: dev_seed_11  data 371df9be   SHA: a2687b1   2026-08-26 15:48
-Records processed         477          Wall clock    0.002s
-Auto-matched              242    50.7%   Throughput  216522 rec/s
+Dataset: dev_seed_11  data 371df9be   SHA: ab178c5   2026-08-26 15:57
+Records processed         477          Wall clock    0.003s
+Auto-matched              242    50.7%   Throughput  177455 rec/s
   Layer 1  exact            242    50.7%
   Layer 2  netting           --       --   not built yet
   Layer 3  fuzzy             --       --   not built yet
@@ -33,6 +33,15 @@ Exceptions                235    49.3%      Rs 29,56,629.16 at risk
 LLM calls                   0          Calls / 100  0.0%
 Cost / 1000            Rs TBD          USD 0.000000 total
 Audit ledger               33 entries   head b6a2c5f69534
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       2 batches  resolved 0  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 2
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  export_cutoff_skew                 3 batches  resolved 0  refused 0  exhausted 0  unclassified 3
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 0  exhausted 0  unclassified 2
+  on_hold_release_misdated           2 batches  resolved 0  refused 0  exhausted 0  unclassified 2
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 0  unclassified 1
+FINDING  UNCLASSIFIED holds 193 records (82.1% of exceptions). Target 0 by Phase 5.
+         Every record in it has a home in the enum; the count is a measure of layers not yet built, not of records that defy classification.
 By pathology  (records carry >=1, so these OVERLAP and do not sum to 477)
   P1   345/464  P2    24/46   P3     8/16   P4     3/3    P5     4/4    P6    14/20
   P7    46/46   P8    20/20   P9    23/37   P10    0/34   P11    2/2    P12   10/12
@@ -56,6 +65,14 @@ approved group balanced at δ == 0 exactly, and a group containing a wrong membe
 balance unless its arithmetic coincidentally sums. The detector was then mutation-tested —
 corrupting an approved group makes the count rise, and every record in a wrongly-composed
 group counts, per the set-equality rule. `tests/test_harness.py` holds both checks.
+
+**Reading the per-mechanism table.** This is the diagnostic, and it already says something:
+`duplicate_reference_contamination resolved 2` means pathology 2 is fully handled *at Layer 1*
+by the reference-plus-value-date composite key, not deferred to Layer 2. And
+`credit_without_parseable_utr ... MISSING_BANK_ROW 2` exposes a real classification gap — those
+bank credits exist, they simply carry no readable reference, and an exact-match layer cannot
+tell that apart from a genuine feed gap. Splitting `MISSING_BANK_ROW` from
+`UNPARSEABLE_NARRATION` needs narration parsing, so it is a Phase 5 gate item.
 
 **Reading the per-pathology row.** `P10 0/34` is honest: pathology 10 is the on-hold-release
 mechanism, whose batches all have δ ≠ 0, and Layer 2 does not exist yet. `P7 46/46` and
@@ -86,7 +103,7 @@ It is not comparable to them, however similar the numbers look.
 
 | Phase | Dataset | Dataset SHA | Auto-match | False-match | Exceptions | Git SHA | Date |
 |---|---|---|---|---|---|---|---|
-| 2 (baseline, exact only) | `dev_seed_11` | `371df9be` | 50.7% | 0.00% | 235 | `a2687b1` | 2026-08-26 |
+| 2 (baseline, exact only) | `dev_seed_11` | `371df9be` | 50.7% | 0.00% | 235 | `ab178c5` | 2026-08-26 |
 | 3 (+ netting) | `dev_seed_11` | TBD | TBD | TBD | TBD | TBD | TBD |
 | 4 (+ fuzzy) | `dev_seed_11` | TBD | TBD | TBD | TBD | TBD | TBD |
 | 5 (+ LLM) | `dev_seed_11` | TBD | TBD | TBD | TBD | TBD | TBD |
