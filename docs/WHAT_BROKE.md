@@ -264,10 +264,40 @@ built to handle.
 have gateway counterparts so a genuine 2×2 tie exists; and refusals are reported as two
 permanent, separate lines with the strict definition.
 
+### 5. The deployed environment proxied by a convenient one
+
+The Dockerfile declares `ARG GIT_SHA=unknown` and bakes it to `ENV FINCTL_GIT_SHA`. On any
+platform that builds the image itself — which is every platform, since none passes Docker build
+args from a blueprint — that default is **always present**, so the provenance fallback checked
+`FINCTL_GIT_SHA` first, found the non-empty string `unknown`, and returned it. `RENDER_GIT_COMMIT`
+sat one entry later in the chain and was never read. The deployed service reported
+`git_sha: unknown` — precisely the gap the fallback was written to close.
+
+The test for it passed. It set `FINCTL_GIT_SHA` to **blank**, and blank is a state no deployment
+produces. I had also "verified on Render's exact configuration" by running the container with
+`-e FINCTL_GIT_SHA=` — I constructed the one environment in which the bug is invisible and called
+it faithful. Two further reproduction attempts also missed, because the image under test had been
+built *with* `--build-arg GIT_SHA=$(git rev-parse HEAD)` and therefore had a real SHA baked; the
+bug only appears in an image built the way the platform builds it.
+
+**What actually caught it:** the live URL. `/healthz` on the deployed service, read from outside.
+Not the suite, which was green at 274 tests.
+
+**Now:** the `unknown` sentinel is skipped rather than returned, so our own marker for *no answer*
+cannot outrank a real one; a test asserts the deployed condition verbatim (sentinel baked in **and**
+platform variable present) and is mutation-checked against the old code; and a companion test
+confirms `unknown` is still returned when it genuinely is the only answer, so the skip is ordering
+and not suppression. Verified by rebuilding with no build arg — `FINCTL_GIT_SHA=[unknown]` in the
+image, `git_sha: 9d22c78` on `/healthz`.
+
+**The lesson is narrower than "test the real thing" and worth stating exactly:** when a test needs
+the environment configured, the configuration is part of what is under test. Setting it to whatever
+makes the assertion pass is the same error as writing the assertion to match the output.
+
 ---
 
 **What this changes about how the remaining phases are checked.** For each gate, the question
-is not "does a test pass" but **"could this test pass while the property is false?"** Three
+is not "does a test pass" but **"could this test pass while the property is false?"** Four
 habits came out of it, all now in use:
 
 1. **Mutation-test the check.** A guard that has never been seen to fail has not been shown to
@@ -277,6 +307,10 @@ habits came out of it, all now in use:
 3. **Prefer the strict reading of any metric.** Where "correct" could mean *avoided a wrong
    answer* or *gave the right answer for the right reason*, report the second. The first
    flatters exactly the components that do not exist yet.
+4. **Reproduce in the environment that has the bug, not the one that is easy to build.** If a
+   test or a manual check needs environment variables or build flags set, those settings are part
+   of the claim. Added after #5, where three separate reproduction attempts all quietly removed
+   the condition that caused the failure.
 
 ---
 

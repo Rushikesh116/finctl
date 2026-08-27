@@ -154,7 +154,11 @@ def git_sha(*, short: bool = True, root: Path = REPO_ROOT) -> str:
     """
     for variable in _SHA_ENV_VARS:
         baked = os.environ.get(variable, "").strip()
-        if baked:
+        # `UNKNOWN` is skipped, not returned. It is *our own sentinel for "no answer"*, and the
+        # Dockerfile bakes it as the `ARG GIT_SHA` default — so on any platform that builds the
+        # image without a build arg it is always present, and treating it as an answer let it
+        # shadow the real SHA the platform supplies one entry later.
+        if baked and baked.lower() != UNKNOWN:
             return baked[:7] if short else baked
 
     command = ["git", "rev-parse", "--short" if short else "HEAD", "HEAD"]

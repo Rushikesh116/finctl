@@ -2,8 +2,11 @@
 
 | | |
 |---|---|
-| **Static report — live now** | **<https://rushikesh116.github.io/finctl/>** |
-| **Live API + UI** | *not yet deployed — see [Deploy](#deploy). No URL is listed here until one answers.* |
+| **Live API + UI** | **<https://finctl.onrender.com>** — [`/healthz`](https://finctl.onrender.com/healthz) · [`/api/run`](https://finctl.onrender.com/api/run) · [`/api/exceptions`](https://finctl.onrender.com/api/exceptions) |
+| **Static report** | **<https://rushikesh116.github.io/finctl/>** — whole run inlined, no server, no fetch |
+
+Free tier, so the first request after an idle period cold-starts. The static report is the
+zero-infrastructure fallback: if the service is asleep, the numbers are still readable.
 
 **An AI finance controller for payment reconciliation.** Given a merchant's order ledger, a
 payment gateway's records, and a bank statement, FinCtl determines which records match,

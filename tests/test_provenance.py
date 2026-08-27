@@ -200,6 +200,39 @@ def test_blank_platform_variable_falls_through(
     assert git_sha(root=tmp_path) == "3333333"
 
 
+def test_baked_unknown_sentinel_does_not_shadow_the_platform_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exact condition of a platform-built image, which the first version got wrong.
+
+    `ARG GIT_SHA=unknown` in the Dockerfile means `FINCTL_GIT_SHA=unknown` is *always* set in an
+    image built without a build arg — which is every platform build. The earlier test passed only
+    because it set that variable to blank, a state no deployment produces. So the suite was green
+    while the deployed service reported `git_sha: unknown`.
+
+    Asserts the deployed condition verbatim: sentinel baked in, platform variable present.
+    """
+    monkeypatch.setenv("FINCTL_GIT_SHA", UNKNOWN)
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "9d22c78aaaabbbb")
+
+    assert git_sha(root=tmp_path) == "9d22c78"
+
+
+def test_unknown_is_still_returned_when_it_is_the_only_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Skipping the sentinel must not turn "no provenance" into a crash or a blank.
+
+    With no source available the honest answer is still `unknown` — the point of the skip is
+    ordering, not suppression.
+    """
+    for name in _SHA_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("FINCTL_GIT_SHA", UNKNOWN)
+
+    assert git_sha(root=tmp_path) == UNKNOWN
+
+
 def test_dockerfile_healthcheck_is_not_pinned_to_one_port() -> None:
     """The probe must read PORT.
 
