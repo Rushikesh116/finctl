@@ -23,10 +23,11 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 6. 76.2% auto-match, 0.00% false matches. Static report is live at
-<https://rushikesh116.github.io/finctl/>. Remaining: the hosted API deploy, the designed UI,
-and the single holdout evaluation.** `docs/PROGRESS.md` is authoritative; if it disagrees with
-this line, it wins.
+**Current phase: Phase 6, nearly closed. 76.2% auto-match, 0.00% false matches. Both URLs are
+live — API at <https://finctl.onrender.com>, static report at
+<https://rushikesh116.github.io/finctl/> — and the UI is built. The only thing left in Phase 6
+is the single holdout evaluation, which runs last, after everything else is frozen.**
+`docs/PROGRESS.md` is authoritative; if it disagrees with this line, it wins.
 
 ---
 

@@ -30,7 +30,8 @@ from data.generator import DATASET_SEEDS
 PHASE = 6
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WEB_DIR = REPO_ROOT / "web"
+# `web/` is deliberately not referenced here. The renderer owns it and inlines it; this module
+# never serves it as an asset.
 
 load_dotenv()
 
