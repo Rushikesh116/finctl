@@ -21,6 +21,7 @@ provenance with total confidence. Divergence is surfaced as `drift`, not smoothe
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -130,9 +131,18 @@ def manifest_dataset_sha(name: str, *, manifest: Path = MANIFEST_PATH) -> str | 
 def git_sha(*, short: bool = True, root: Path = REPO_ROOT) -> str:
     """The current commit, or `"unknown"` outside a repository.
 
-    Never raises: a harness must still be able to print its numbers in a tarball with no
-    `.git`, as long as it says so instead of inventing a SHA.
+    Checks `FINCTL_GIT_SHA` first. A container image deliberately does not carry `.git`, so
+    without that the deployed artefact could not report which code produced its numbers — the
+    same provenance gap the dataset SHA closes, reopened on the code axis. The Dockerfile bakes
+    it in as a build argument.
+
+    Never raises: a harness must still print its numbers from a tarball with no `.git`, as long
+    as it says so rather than inventing a SHA.
     """
+    baked = os.environ.get("FINCTL_GIT_SHA", "").strip()
+    if baked:
+        return baked[:7] if short else baked
+
     command = ["git", "rev-parse", "--short" if short else "HEAD", "HEAD"]
     if not short:
         command = ["git", "rev-parse", "HEAD"]

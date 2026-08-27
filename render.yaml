@@ -1,0 +1,18 @@
+# Render blueprint. The Dockerfile is the source of truth; this only tells Render how to run it,
+# so the same image is portable to Railway, Fly, or anything else that speaks Docker.
+services:
+  - type: web
+    name: finctl
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      # DEMO_MODE=1 is deliberate, not a limitation. It serves the pre-computed run from
+      # committed fixtures: no API key in the deployed environment, no cold-start model call, no
+      # provider quota, and identical output on every click.
+      - key: DEMO_MODE
+        value: "1"
+      # Deliberately NOT set. The deployed container must not hold a model credential; if one
+      # were present a cache miss would reach the network and the run would stop being replayable.
+      # - key: GEMINI_API_KEY

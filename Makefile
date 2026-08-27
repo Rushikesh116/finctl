@@ -10,7 +10,7 @@ DEV_DATASET      ?= dev_seed_11
 HOLDOUT_DATASET  ?= holdout_seed_97
 
 .DEFAULT_GOAL := help
-.PHONY: help setup hooks seed run eval eval-holdout llm-curve report serve test demo clean
+.PHONY: help setup hooks seed run eval eval-holdout llm-curve report serve test demo clean docker-build docker-run
 
 help:
 	@echo "FinCtl targets"
@@ -51,6 +51,19 @@ eval-holdout:
 	@echo "About to evaluate $(HOLDOUT_DATASET). This is a Phase 6, once-only action."
 	@echo "Whatever it prints is what ships, even if it is worse than dev."
 	$(PY) -m eval.harness --dev $(DEV_DATASET) --holdout $(HOLDOUT_DATASET) --ablation
+
+docker-build:
+	docker build --build-arg GIT_SHA=$$(git rev-parse --short HEAD) -t finctl:local .
+
+# HOST_PORT is overridable because 8000 is a popular port and a silent bind conflict looks
+# exactly like a broken container: the health check passes inside while the host reaches
+# something else entirely.
+HOST_PORT ?= 8010
+
+docker-run: docker-build
+	docker rm -f finctl >/dev/null 2>&1 || true
+	docker run -d --name finctl -p $(HOST_PORT):8000 finctl:local
+	@echo "serving on http://127.0.0.1:$(HOST_PORT)  (health: /healthz)"
 
 llm-curve:
 	$(PY) -m scripts.llm_curve --runs 4
