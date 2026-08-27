@@ -128,20 +128,34 @@ def manifest_dataset_sha(name: str, *, manifest: Path = MANIFEST_PATH) -> str | 
     return _digest_lines(lines) if lines else None
 
 
+# Checked in order. `FINCTL_GIT_SHA` is ours and wins, so an explicit build argument always
+# overrides a platform guess. The rest are injected by the host at runtime and are the only way a
+# platform-built image can report its own provenance: neither Render nor Railway passes Docker
+# build args from a blueprint, so `--build-arg GIT_SHA=` is unavailable there. Names verified
+# against each platform's published runtime-variable list, not recalled.
+_SHA_ENV_VARS = (
+    "FINCTL_GIT_SHA",
+    "RENDER_GIT_COMMIT",
+    "RAILWAY_GIT_COMMIT_SHA",
+)
+
+
 def git_sha(*, short: bool = True, root: Path = REPO_ROOT) -> str:
     """The current commit, or `"unknown"` outside a repository.
 
-    Checks `FINCTL_GIT_SHA` first. A container image deliberately does not carry `.git`, so
-    without that the deployed artefact could not report which code produced its numbers — the
-    same provenance gap the dataset SHA closes, reopened on the code axis. The Dockerfile bakes
-    it in as a build argument.
+    Checks the environment first, then `git`. A container image deliberately does not carry
+    `.git`, so without an environment source the deployed artefact could not report which code
+    produced its numbers — the same provenance gap the dataset SHA closes, reopened on the code
+    axis. Locally the Dockerfile bakes it in as a build argument; on a platform that builds the
+    image for us, the platform's own commit variable is the only source available.
 
     Never raises: a harness must still print its numbers from a tarball with no `.git`, as long
     as it says so rather than inventing a SHA.
     """
-    baked = os.environ.get("FINCTL_GIT_SHA", "").strip()
-    if baked:
-        return baked[:7] if short else baked
+    for variable in _SHA_ENV_VARS:
+        baked = os.environ.get(variable, "").strip()
+        if baked:
+            return baked[:7] if short else baked
 
     command = ["git", "rev-parse", "--short" if short else "HEAD", "HEAD"]
     if not short:

@@ -63,7 +63,11 @@ EXPOSE 8000
 
 # Reports readiness AND the dataset/git SHAs it is serving, so a healthy container that is
 # serving stale data is distinguishable from one that is not.
+#
+# Reads PORT rather than hardcoding 8000: the platform picks the port (Render defaults to 10000
+# and uvicorn honours it below), and a probe pinned to 8000 would report an otherwise healthy
+# container as failing — a health check lying in the safe direction is still a health check lying.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status==200 else 1)"
+  CMD ["python", "-c", "import os,sys,urllib.request; port=os.environ.get('PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=4).status==200 else 1)"]
 
 CMD ["sh", "-c", "uvicorn api.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

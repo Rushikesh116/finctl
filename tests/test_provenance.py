@@ -13,6 +13,7 @@ import pytest
 
 from eval.provenance import (
     UNKNOWN,
+    _SHA_ENV_VARS,
     capture,
     dataset_files,
     dataset_sha,
@@ -154,6 +155,64 @@ def test_manifest_dataset_sha_is_none_for_an_unknown_dataset(
 def test_git_sha_never_raises_outside_a_repository(tmp_path: Path) -> None:
     """A tarball with no .git must still produce a printable run header."""
     assert git_sha(root=tmp_path) in {UNKNOWN} or len(git_sha(root=tmp_path)) >= 7
+
+
+@pytest.mark.parametrize(
+    "variable", ["FINCTL_GIT_SHA", "RENDER_GIT_COMMIT", "RAILWAY_GIT_COMMIT_SHA"]
+)
+def test_git_sha_reads_each_platform_commit_variable(
+    variable: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every declared source is actually consulted.
+
+    `root=tmp_path` removes the git fallback, so a variable that is *not* read would leave this
+    returning UNKNOWN rather than the SHA — the test fails if a name is declared but unused.
+    """
+    for name in _SHA_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(variable, "abcdef1234567890")
+
+    assert git_sha(root=tmp_path) == "abcdef1"
+    assert git_sha(short=False, root=tmp_path) == "abcdef1234567890"
+
+
+def test_explicit_build_arg_beats_a_platform_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ours wins. A deliberate `--build-arg GIT_SHA=` must not be shadowed by the host."""
+    monkeypatch.setenv("FINCTL_GIT_SHA", "1111111aaaa")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "2222222bbbb")
+
+    assert git_sha(root=tmp_path) == "1111111"
+
+
+def test_blank_platform_variable_falls_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty or whitespace value is absence, not a SHA.
+
+    Platforms set variables to `""` in some build contexts; returning that would print an empty
+    provenance field that reads as a real answer.
+    """
+    monkeypatch.setenv("FINCTL_GIT_SHA", "   ")
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "3333333cccc")
+
+    assert git_sha(root=tmp_path) == "3333333"
+
+
+def test_dockerfile_healthcheck_is_not_pinned_to_one_port() -> None:
+    """The probe must read PORT.
+
+    Render assigns PORT=10000 and uvicorn honours it, so a health check hardcoding 8000 marks a
+    working container unhealthy. This asserts the property rather than the absence of the literal,
+    because the CMD may legitimately keep 8000 as its default.
+    """
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    healthcheck = next(
+        line for line in dockerfile.splitlines() if line.lstrip().startswith("CMD [\"python\"")
+    )
+    assert "PORT" in healthcheck, "health check does not consult PORT"
+    assert "127.0.0.1:8000" not in healthcheck, "health check is pinned to port 8000"
 
 
 def test_real_repository_provenance_is_trustworthy() -> None:
