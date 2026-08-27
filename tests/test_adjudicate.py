@@ -343,3 +343,53 @@ def test_the_gate_on_patterns_a_model_might_plausibly_propose(
     else:
         with pytest.raises(PromotionRejected):
             cache.promote(pattern, example=example, expected=expected, name="candidate")
+
+
+# --- the two reporting-honesty rules -----------------------------------------------------------
+
+
+def test_cold_calls_per_100_is_never_estimated() -> None:
+    """A cold rate is only knowable from a run that made every call fresh.
+
+    Anything else would be an estimate, and eval-protocol §1 forbids a number no command
+    produced. `not measured` is the correct output, not 0.00.
+    """
+    from eval import harness
+
+    replayed = harness.Metrics(
+        dataset="x", provenance=harness.capture(DEV), n=500, llm_calls=0, llm_cache_hits=6
+    )
+    text = harness._cold_calls_per_100(replayed)
+    assert "not measured" in text
+    assert "0.00" not in text, "a replayed run reported a cold rate"
+    assert "quota" in text, "the reason the cold run did not complete must be stated"
+
+    cold = harness.Metrics(
+        dataset="x", provenance=harness.capture(DEV), n=500, llm_calls=8, llm_cache_hits=0
+    )
+    assert "1.60" in harness._cold_calls_per_100(cold), "a genuinely cold run must report its rate"
+
+
+def test_the_replay_banner_explains_where_the_models_contribution_went() -> None:
+    """The banner counts this run's responses, which understates a promoted model's work.
+
+    Once a proposal is promoted the narration resolves via the cached regex and the fixture is
+    never read again, so the model vanishes from the response counts while its rule keeps
+    working. The note has to sit next to the banner, not further down the block.
+    """
+    from eval import harness
+
+    metrics = harness.evaluate(DEV)
+    if not (metrics.llm_stubbed and harness._rules_authored_by_a_model(metrics)):
+        pytest.skip("no real-model-authored rule alongside a stubbed run to disambiguate")
+
+    lines = harness.render(metrics).splitlines()
+    banner = next(i for i, line in enumerate(lines) if "Adjudicator:" in line)
+    note = next((i for i, line in enumerate(lines) if "counts THIS RUN" in line), None)
+
+    assert note is not None, "the banner is unexplained on the replay path"
+    assert note == banner + 1, (
+        f"the note is {note - banner} lines from the banner it explains; a clarification that "
+        "far away is not a clarification"
+    )
+    assert "rules cache" in lines[note]

@@ -118,6 +118,68 @@ class Metrics:
         return f"{100 * numerator / denominator:.1f}%" if denominator else "n/a"
 
 
+def _calls_per_100(metrics: Metrics) -> str:
+    """This run's call rate, labelled with how it was obtained.
+
+    A rate of 0.00 from a fully replayed run and a rate of 0.00 from a run that genuinely needed
+    no calls are different facts, and an unlabelled number cannot tell them apart.
+    """
+    if not metrics.n:
+        return "n/a"
+    rate = 100 * metrics.llm_calls / metrics.n
+    if metrics.llm_cache_hits and not metrics.llm_calls:
+        return f"{rate:.2f} (replay: all {metrics.llm_cache_hits} responses from cache)"
+    if metrics.llm_cache_hits:
+        return f"{rate:.2f} (partial cache: {metrics.llm_cache_hits} hits)"
+    return f"{rate:.2f} (cold)"
+
+
+def _cold_calls_per_100(metrics: Metrics) -> str:
+    """The cold rate, or an explicit refusal to supply one.
+
+    Only a run that made **every** call fresh has measured the cold rate. Anything else would be
+    an estimate, and an estimated cost figure in a metrics block is exactly the kind of number
+    this project refuses to print. `not measured` is the honest output (eval-protocol §1).
+    """
+    if metrics.llm_calls and not metrics.llm_cache_hits:
+        return f"{100 * metrics.llm_calls / metrics.n:.2f} (measured: this run was cold)"
+    if metrics.llm_cache_hits:
+        return (
+            "not measured -- this run replayed from cache, so it cannot report a cold rate. "
+            "The last cold attempt was terminated by provider quota exhaustion; see "
+            "docs/METRICS.md."
+        )
+    return "not measured -- no adjudication calls were attempted"
+
+
+def _rules_authored_by_a_model(metrics: Metrics) -> int:
+    """Promoted rules whose author was a real provider rather than the offline stub."""
+    return sum(
+        count
+        for source, count in metrics.rules_by_source.items()
+        if source and not source.startswith(("offline_stub", "seeded", "unknown"))
+    )
+
+
+def _banner_note(metrics: Metrics) -> list[str]:
+    """Why the banner can read STUBBED while a real model's work is still doing the extracting.
+
+    The banner counts THIS RUN's responses. Once a model's proposal is promoted, the narration is
+    handled by the cached regex and the fixture that produced it is never read again — so the
+    model correctly disappears from the response counts while its rule keeps working. Correct
+    behaviour, confusing label, so it is stated next to the label rather than further down.
+    """
+    authored = _rules_authored_by_a_model(metrics)
+    if not authored or not metrics.llm_stubbed:
+        return []
+    return [
+        f"  ^ counts THIS RUN's responses. {authored} cached rule(s) were authored by a real "
+        "model; those narrations now resolve via the promoted regex, so their fixtures are never "
+        "consulted and the model does not appear above. Its contribution moved from the response "
+        "cache into the rules cache, which is what promotion is for.",
+    ]
+
+
 def _proposer_banner(metrics: Metrics) -> str:
     """State the real/stub mixture precisely rather than as a boolean.
 
@@ -679,6 +741,7 @@ def render(metrics: Metrics) -> str:
         f"Adjudicator: {metrics.llm_provider} / "
         f"{','.join(metrics.llm_model_versions) or '-'}"
         + _proposer_banner(metrics),
+        *_banner_note(metrics),
         f"Records processed  {metrics.n:>10}          "
         f"Wall clock  {seconds:>7.3f}s",
         f"Auto-matched       {metrics.auto_matched:>10}   "
@@ -710,7 +773,8 @@ def render(metrics: Metrics) -> str:
         + (", ".join(f"{k} {v}" for k, v in sorted(metrics.by_class.items())) or "none"),
         f"LLM calls          {metrics.llm_calls:>10}   "
         f"cache hits {metrics.llm_cache_hits:>4}   "
-        f"Calls / 100  {(100 * metrics.llm_calls / metrics.n) if metrics.n else 0:.2f}",
+        f"Calls / 100  {_calls_per_100(metrics)}",
+        f"  cold calls / 100: {_cold_calls_per_100(metrics)}",
         "  by kind: "
         + (
             ", ".join(f"{k} {v}" for k, v in sorted(metrics.llm_calls_by_kind.items()))

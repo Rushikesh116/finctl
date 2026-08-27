@@ -70,8 +70,8 @@ changes what running this actually feels like.
 | Free-tier quota | **20 requests per day**, per project per model (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`) |
 | First successful call | **82.4 seconds, 4 retries** — repeated `503 UNAVAILABLE: this model is currently experiencing high demand` |
 | Terminal failure | `429 RESOURCE_EXHAUSTED` after 6 retries, quota spent |
-| Calls / 100 records, replay | **0.00** (6 cache hits) |
-| Calls / 100 records, cold | **not measurable** — the cold run never completed |
+| Calls / 100 records, replay | **0.00** — all 6 responses from cache |
+| Calls / 100 records, cold | **not measured** — the cold run was terminated by quota exhaustion. No estimate is given, and the block prints `not measured` rather than a number |
 
 **My own retry code caused the quota exhaustion.** Blind exponential backoff treated a capacity
 problem (503) as worth hammering, and every attempt spent a unit of a 20-per-day allowance. Two
@@ -140,10 +140,19 @@ Ablation (same dataset, layers enabled cumulatively)
 ```
 
 The banner reads `STUBBED PROPOSER (6 responses)` on this replay and that is **accurate for this
-run**, for a reason worth understanding: the two real-model narrations are now handled by cached
-rules, so their fixtures are never read again. The model's contribution moved out of the response
-cache and into the rules cache — which is exactly the intended behaviour, and why rule authorship
-is recorded separately from response provenance.
+run** but misleading on its own, so **the block now says why on the line directly beneath it**:
+
+```
+Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
+  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those
+    narrations now resolve via the promoted regex, so their fixtures are never consulted
+    and the model does not appear above. Its contribution moved from the response cache
+    into the rules cache, which is what promotion is for.
+```
+
+The note is asserted to sit *adjacent* to the banner by
+`test_the_replay_banner_explains_where_the_models_contribution_went` — a clarification twenty-eight
+lines from the thing it clarifies is not a clarification, which is where it first landed.
 
 Fixtures are **mixed**: 2 real (`google-gemini`), 6 stub for the shapes the quota did not reach.
 The banner reports the mixture rather than a boolean, so a partly-real run cannot read as fully
