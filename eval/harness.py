@@ -19,6 +19,7 @@ from pathlib import Path
 
 from audit.ledger import AuditLedger, verify_chain
 from core import adjudicate, assignment, identity, llm, results, settlement
+from core.config import load_dotenv
 from core.rules_cache import RulesCache
 from core.money import format_rupees
 from core.results import EX_AMBIGUOUS
@@ -95,11 +96,16 @@ class Metrics:
     llm_calls_by_kind: dict[str, int] = field(default_factory=dict)
     llm_mode: str = "-"
     llm_provider: str = "-"
+    llm_retries: int = 0
+    llm_retry_wait_s: float = 0.0
+    llm_real_responses: int = 0
+    adjudication_us: int = 0
     llm_model_versions: tuple[str, ...] = ()
     llm_stubbed: bool = False
     cost_micros_usd: int = 0
     rules_total: int = 0
     rules_promoted: int = 0
+    rules_by_source: dict[str, int] = field(default_factory=dict)
     adjudication: adjudicate.AdjudicationReport | None = None
     by_mechanism: dict[str, dict[str, int]] = field(default_factory=dict)
     unclassified_records: int = 0
@@ -110,6 +116,28 @@ class Metrics:
 
     def pct(self, numerator: int, denominator: int) -> str:
         return f"{100 * numerator / denominator:.1f}%" if denominator else "n/a"
+
+
+def _proposer_banner(metrics: Metrics) -> str:
+    """State the real/stub mixture precisely rather than as a boolean.
+
+    A run can legitimately be part real and part stub — a daily quota can run out mid-run — and
+    "STUBBED" or nothing would both be wrong for that state. The banner reports counts so a
+    reader can see exactly how much of the adjudication came from a model.
+    """
+    real, stub = metrics.llm_real_responses, 0
+    if metrics.adjudication is not None:
+        stub = max(
+            0,
+            (metrics.llm_calls + metrics.llm_cache_hits) - metrics.llm_real_responses,
+        )
+    if stub and real:
+        return f"   !! MIXED: {real} real model responses, {stub} from the offline stub"
+    if stub:
+        return f"   !! STUBBED PROPOSER, not a model ({stub} responses)"
+    if real:
+        return f"   ({real} real model responses)"
+    return ""
 
 
 def _percent(numerator: int, denominator: int, places: int = 1) -> str:
@@ -272,6 +300,10 @@ def evaluate(
     comparing different inputs — which is precisely what the dataset SHA column exists to make
     visible.
     """
+    # Idempotent, and called here rather than only in main() so a test or a notebook driving
+    # evaluate() directly sees the same configuration a CLI run would.
+    load_dotenv()
+
     paths = dataset_paths(dataset_name)
     provenance = capture(dataset_name)
 
@@ -323,7 +355,9 @@ def evaluate(
 
     proposer = None
     report = None
+    adjudication_us = 0
     if max_layer >= adjudicate.LAYER:
+        adjudication_started = time.perf_counter()
         rules_path = Path(os.environ.get("FINCTL_RULES_CACHE", "fixtures/rules_cache.json"))
         rules = RulesCache.load(rules_path)
         proposer = llm.build_proposer()
@@ -345,6 +379,7 @@ def evaluate(
         # MISSING_GATEWAY_ROW behind for the same credits, which the disjointness check caught.
         result.exceptions = _withdraw_superseded(result.exceptions, result.groups)
         rules.save(rules_path)
+        adjudication_us = int((time.perf_counter() - adjudication_started) * 1_000_000)
 
     absorb_unresolved(data, result)
     elapsed_us = int((time.perf_counter() - started) * 1_000_000)
@@ -358,9 +393,13 @@ def evaluate(
         metrics.llm_calls_by_kind = dict(proposer.stats.calls_by_schema)
         metrics.llm_mode = proposer.mode
         metrics.llm_provider = proposer.stats.provider
+        metrics.llm_retries = proposer.stats.retries
+        metrics.llm_retry_wait_s = proposer.stats.retry_wait_s
+        metrics.llm_real_responses = proposer.stats.real_responses
         metrics.llm_model_versions = tuple(sorted(proposer.stats.model_versions))
         metrics.llm_stubbed = proposer.stats.is_stubbed
         metrics.cost_micros_usd = proposer.stats.cost_micros_usd
+    metrics.adjudication_us = adjudication_us
     if report is not None:
         metrics.adjudication = report
         rules_now = RulesCache.load(
@@ -368,6 +407,7 @@ def evaluate(
         )
         metrics.rules_total = len(rules_now)
         metrics.rules_promoted = len(rules_now.promoted)
+        metrics.rules_by_source = rules_now.promoted_by_source()
 
     ledger = _write_ledger(
         result,
@@ -638,11 +678,7 @@ def render(metrics: Metrics) -> str:
         f"{p.header_fragment()}   SHA: {p.git_sha}   {p.started_at_utc}",
         f"Adjudicator: {metrics.llm_provider} / "
         f"{','.join(metrics.llm_model_versions) or '-'}"
-        + (
-            "   !! STUBBED PROPOSER, not a model"
-            if metrics.llm_stubbed
-            else ""
-        ),
+        + _proposer_banner(metrics),
         f"Records processed  {metrics.n:>10}          "
         f"Wall clock  {seconds:>7.3f}s",
         f"Auto-matched       {metrics.auto_matched:>10}   "
@@ -683,6 +719,20 @@ def render(metrics: Metrics) -> str:
         + f"   MODE={metrics.llm_mode}",
         f"Rules cache        {metrics.rules_total:>10} rules   {metrics.rules_promoted} promoted "
         f"from narration the seeded regex missed",
+        # Rule provenance, not response provenance. A promoted rule retires the call that
+        # created it, so the response never gets read again -- this is the durable record of
+        # whose work is doing the extracting.
+        "  authored by: "
+        + (
+            ", ".join(f"{k} x{v}" for k, v in metrics.rules_by_source.items())
+            or "none promoted yet"
+        ),
+        # Operating conditions, reported apart from the call curve on purpose. Calls per 100 is
+        # a cost measure; retries and latency are what running this actually feels like, and a
+        # provider under load dominates wall clock without changing the call count at all.
+        f"Adjudication       {metrics.adjudication_us / 1_000_000:>9.1f}s   "
+        f"retries {metrics.llm_retries:<3} backoff {metrics.llm_retry_wait_s:>5.0f}s   "
+        f"({100 * metrics.adjudication_us / max(metrics.wall_clock_us, 1):.0f}% of wall clock)",
         f"Cost / 1000        {'Rs TBD':>10}          "
         f"USD {metrics.cost_micros_usd / 1_000_000:.6f} total",
         f"Audit ledger       {metrics.ledger_entries:>10} entries   head {metrics.ledger_head[:12]}",

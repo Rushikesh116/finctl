@@ -1,17 +1,17 @@
 {
   "model": "gemini-3.7-flash",
   "model_version": "gemini-3.7-flash",
-  "provider": "offline_stub",
+  "provider": "google-gemini",
   "response": {
-    "confidence": 75,
-    "reasoning": "anchored on the literal text surrounding '1552002271luumnm'",
+    "confidence": 95,
+    "reasoning": "The narration follows standard RTGS credit format where the settlement reference immediately follows 'RTGS CR REF ' and precedes 'RAZORPAY'.",
     "reference": "1552002271luumnm",
-    "regex": "RTGS\\ CR\\ REF\\ ([A-Za-z0-9]{8,40})\\ RAZ"
+    "regex": "^RTGS CR REF ([A-Za-z0-9]+) RAZORPAY$"
   },
   "schema": "narration_parse",
-  "source": "offline_stub",
+  "source": "google-gemini",
   "usage": {
-    "input_tokens": 0,
-    "output_tokens": 0
+    "input_tokens": 145,
+    "output_tokens": 93
   }
 }

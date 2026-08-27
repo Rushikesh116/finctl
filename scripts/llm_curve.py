@@ -82,6 +82,9 @@ def _render(title: str, note: str, rows: list[tuple[int, int, int, int, int]]) -
 
 
 def main(argv: list[str] | None = None) -> int:
+    from core.config import load_dotenv
+
+    load_dotenv()
     parser = argparse.ArgumentParser(description="LLM call curve across repeated runs")
     parser.add_argument("--dataset", default="dev_seed_11")
     parser.add_argument("--runs", type=int, default=4)

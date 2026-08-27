@@ -62,10 +62,28 @@ _EXPLAIN_SYSTEM = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class NarrationOutcome:
+    """One narration, what was proposed for it, and what the gate did about it.
+
+    Recorded per narration rather than as aggregate counts because the rejections are the
+    interesting rows: a rejected proposal is the gate earning its place, and an aggregate
+    "2 promoted, 1 rejected" cannot tell you which pattern was refused or why.
+    """
+
+    narration: str
+    source: str
+    reference: str | None
+    regex: str | None
+    verdict: str
+    reason: str = ""
+
+
 @dataclass
 class AdjudicationReport:
     """What Layer 4 did, for the metrics block."""
 
+    outcomes: list[NarrationOutcome] = field(default_factory=list)
     narrations_examined: int = 0
     resolved_by_existing_rule: int = 0
     resolved_by_promotion: int = 0
@@ -128,6 +146,16 @@ def resolve(
             if reference in known_utrs:
                 recovered[reference] = row
                 report.resolved_by_existing_rule += 1
+                report.outcomes.append(
+                    NarrationOutcome(
+                        narration=row.narration,
+                        source="existing_rule",
+                        reference=reference,
+                        regex=None,
+                        verdict="resolved_by_rule",
+                        reason=rule_name,
+                    )
+                )
                 continue
 
         # No rule fired, or the rule produced something that is not a real settlement. Ask.
@@ -138,6 +166,20 @@ def resolve(
 
         if proposal.reference is None or proposal.reference not in known_utrs:
             report.unparseable += 1
+            report.outcomes.append(
+                NarrationOutcome(
+                    narration=row.narration,
+                    source="model",
+                    reference=proposal.reference,
+                    regex=proposal.regex,
+                    verdict="no_usable_reference",
+                    reason=(
+                        "model reported no reference present"
+                        if proposal.reference is None
+                        else f"proposed {proposal.reference!r} matches no known settlement UTR"
+                    ),
+                )
+            )
             continue
 
         recovered[proposal.reference] = row
@@ -148,15 +190,37 @@ def resolve(
                     example=row.narration,
                     expected=proposal.reference,
                     name=f"promoted_{len(rules.promoted) + 1}",
+                    # Stamped with who proposed it, because the rule outlives the response.
+                    source=f"{proposer.stats.provider}/{proposer.model}",
                 )
                 report.promotions.append(rule.pattern)
                 report.resolved_by_promotion += 1
+                report.outcomes.append(
+                    NarrationOutcome(
+                        narration=row.narration,
+                        source="model",
+                        reference=proposal.reference,
+                        regex=proposal.regex,
+                        verdict="promoted",
+                        reason=f"cached as {rule.name}",
+                    )
+                )
             except PromotionRejected as rejection:
                 # The reference is still used - it was validated against known UTRs - but the
                 # rule is not cached, so this shape costs a call again next time. Recorded
                 # rather than swallowed: a silently rejected promotion looks like a cache that
                 # simply is not learning.
                 report.promotions_rejected.append(f"{proposal.regex!r}: {rejection}")
+                report.outcomes.append(
+                    NarrationOutcome(
+                        narration=row.narration,
+                        source="model",
+                        reference=proposal.reference,
+                        regex=proposal.regex,
+                        verdict="rejected_by_gate",
+                        reason=str(rejection),
+                    )
+                )
 
     # --- job 2: the split ----------------------------------------------------------------
     for batch in sorted(unlinked_batches, key=lambda b: b.settlement_id):

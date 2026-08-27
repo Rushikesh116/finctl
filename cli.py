@@ -11,6 +11,7 @@ import argparse
 import os
 from pathlib import Path
 
+from core.config import load_dotenv
 from data.generator import DATASET_SEEDS
 from eval import harness
 
@@ -32,6 +33,7 @@ def reconcile(dataset: str, db_path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    load_dotenv()
     parser = argparse.ArgumentParser(prog="finctl", description="FinCtl reconciliation")
     subparsers = parser.add_subparsers(dest="command", required=True)
 

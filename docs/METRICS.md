@@ -7,6 +7,150 @@ output. A result that has not been run is `TBD`. See
 
 ---
 
+## Phase 5 against the real model — Google Gemini, `gemini-3.7-flash`
+
+```
+$ git rev-parse --short HEAD
+a6155f8
+$ .venv/bin/python -c 'from eval.provenance import capture; print(capture("dev_seed_11").dataset_sha)'
+1115450f
+$ rm -rf fixtures/llm/*.json fixtures/rules_cache.json
+$ DEMO_MODE=0 FINCTL_LLM_MAX_RETRIES=6 make eval
+```
+
+**Real calls happened.** Provider `google-gemini`, served version `gemini-3.7-flash` (read from
+`response.model_version`, not the string requested). The run was **truncated by a daily quota**
+before all four narration shapes were reached — see operating conditions below.
+
+### Per narration shape: what the model proposed, and what the gate did
+
+| Narration | Source | Proposed regex | Verdict |
+|---|---|---|---|
+| `NEFT-RAZORPAYSOFTWARE-UTR…-STL` | seeded rule | — | resolved, **no call needed** |
+| `IMPS/1888481283mjoasu/RAZORPAY SOFTWARE` | **real model** | `^IMPS/([a-zA-Z0-9]+)/` | **REJECTED** |
+| `RTGS CR REF 1552002271luumnm RAZORPAY` | **real model** | `^RTGS CR REF ([A-Za-z0-9]+) RAZORPAY$` | **ACCEPTED** |
+| `NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT` | — | — | **not reached — quota exhausted** |
+
+**The rejection, in full.** The model extracted `1888481283mjoasu` correctly and proposed a regex
+that is correct *for its own example*. The gate refused it:
+
+```
+pattern also matches a narration with no reference
+('IMPS/SETTLEMENT/CR' -> 'SETTLEMENT'); a rule this broad would
+ invent references on every unparsed credit
+```
+
+Had it been cached, every future unparsed credit whose narration read `IMPS/SETTLEMENT/CR` would
+have had `SETTLEMENT` attached as its settlement reference. **This is a promotion gate refusing
+real model output**, and it is the result the gate was built for. The prediction was made from a
+hand-written test before any key existed; the model produced exactly the predicted shape.
+
+**The acceptance, because a cached rule should be readable.** `^RTGS CR REF ([A-Za-z0-9]+)
+RAZORPAY$` is anchored on **both** sides, including `$`. No reference-free narration can match it,
+so it is safe, and it is now in the rules cache authored by the model:
+
+```
+seed_neft_utr  UTR([A-Za-z0-9]{8,})                    author: seeded
+promoted_1     ^RTGS CR REF ([A-Za-z0-9]+) RAZORPAY$   author: google-gemini/gemini-3.7-flash
+promoted_2     IMPS/([A-Za-z0-9]{8,40})/RAZ            author: offline_stub/gemini-3.7-flash
+```
+
+**The finding underneath both rows: the model reported confidence 95 on each.** Identical
+confidence for a pattern that is safe and one that would have poisoned the cache. Confidence
+carried no signal about the outcome — the gate did all the discriminating. Any design that had
+gated on `confidence >= 90` instead would have cached both.
+
+### Operating conditions — reported apart from the call curve, deliberately
+
+Calls per 100 records is a **cost** measure. None of the following changes it, and all of it
+changes what running this actually feels like.
+
+| | |
+|---|---|
+| Free-tier quota | **20 requests per day**, per project per model (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`) |
+| First successful call | **82.4 seconds, 4 retries** — repeated `503 UNAVAILABLE: this model is currently experiencing high demand` |
+| Terminal failure | `429 RESOURCE_EXHAUSTED` after 6 retries, quota spent |
+| Calls / 100 records, replay | **0.00** (6 cache hits) |
+| Calls / 100 records, cold | **not measurable** — the cold run never completed |
+
+**My own retry code caused the quota exhaustion.** Blind exponential backoff treated a capacity
+problem (503) as worth hammering, and every attempt spent a unit of a 20-per-day allowance. Two
+defects, both now fixed:
+
+1. **A 429 carrying a per-day quota is no longer retried at all.** It cannot succeed within any
+   sane backoff, and retrying spends the little that remains while reporting nothing new.
+2. **The provider's own `retryDelay` hint is respected** when present. Guessing a backoff while
+   the server explicitly says "retry in 19s" is both less effective and, on a metered tier, more
+   expensive.
+
+Bounded retries had been documented in `.env.example` since Phase 0 and **were never
+implemented** — the first live 503 is what surfaced that. When they did run, they behaved as
+specified: retry the bound, then fail the run rather than complete with partial adjudication.
+
+### Current state, and why the banner still appears
+
+```
+$ git rev-parse --short HEAD
+a6155f8
+$ date -u '+%Y-%m-%d %H:%M UTC'
+2026-08-27 11:11 UTC
+$ DEMO_MODE=1 make eval    # replay, fixtures only
+Dataset: dev_seed_11  data 1115450f   SHA: a6155f8   2026-08-27 11:11
+Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
+Records processed         558          Wall clock    0.265s
+Auto-matched              425    76.2%   Throughput   2104 rec/s
+  Layer 1  exact            325    58.2%
+  Layer 2  netting           73    13.1%
+  Layer 3  fuzzy              0     0.0%
+  Layer 4  LLM+verified      27     4.8%
+False matches               0    0.00%   <- precision, not coverage
+Exceptions                133    23.8%    Rs 1,14,61,299.74 at risk
+  correctly flagged        94    70.7%
+  missed matches           39    29.3%
+  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
+  by class: absent 56, undetermined 38
+LLM calls                   0   cache hits    6   Calls / 100  0.00
+  by kind: none (all replayed from fixtures)   MODE=replay
+Rules cache                 3 rules   2 promoted from narration the seeded regex missed
+Adjudication             0.0s   retries 0   backoff     0s   (1% of wall clock)
+Cost / 1000            Rs TBD          USD 0.000000 total
+Audit ledger               42 entries   head 51b54deedc60
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0
+  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0
+Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.
+  P7 record-level tie            8/8    records   100.0%
+  M5 batch subset ambiguity      2/2    batches   100.0%
+By pathology  (records carry >=1, so these OVERLAP and do not sum to 558)
+  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24
+  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14
+
+Ablation (same dataset, layers enabled cumulatively)
+  arm                  auto-match   false-match   exceptions   UNCLASSIFIED
+  exact only (L1)          58.2%         0.00%          233             94
+  + netting (L2)           71.3%         0.00%          160              4   +13.1pp
+  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp
+  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp
+  False-match rate is reported on every arm: an arm that raises coverage while also
+  raising false matches is a regression being sold as an improvement.
+```
+
+The banner reads `STUBBED PROPOSER (6 responses)` on this replay and that is **accurate for this
+run**, for a reason worth understanding: the two real-model narrations are now handled by cached
+rules, so their fixtures are never read again. The model's contribution moved out of the response
+cache and into the rules cache — which is exactly the intended behaviour, and why rule authorship
+is recorded separately from response provenance.
+
+Fixtures are **mixed**: 2 real (`google-gemini`), 6 stub for the shapes the quota did not reach.
+The banner reports the mixture rather than a boolean, so a partly-real run cannot read as fully
+real or fully stubbed. Dropping it entirely would have been false.
+
+---
+
 ## Phase 5, re-run after the provider swap to Google Gemini (D-0025)
 
 > **The swap did not achieve its stated purpose.** It was made for API access, and there is no

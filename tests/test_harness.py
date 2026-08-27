@@ -203,8 +203,11 @@ def test_the_block_carries_provenance_and_the_overlap_caveat() -> None:
     # still be impossible to miss is that the proposer is a stub rather than a model.
     metrics = harness.evaluate(DEV)
     if metrics.llm_stubbed:
-        assert "STUBBED PROPOSER" in rendered, (
-            "the block reported LLM figures without disclosing that a stub produced them"
+        # The banner states the real/stub mixture rather than a boolean, because a run can be
+        # part real and part stub when a daily quota runs out mid-run. Either wording must make
+        # the stub's involvement impossible to miss.
+        assert "STUBBED PROPOSER" in rendered or "MIXED:" in rendered, (
+            "the block reported LLM figures without disclosing that a stub produced some of them"
         )
 
 

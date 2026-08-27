@@ -303,3 +303,56 @@ in every version; the release bought nothing and cost 38 records' worth of speci
 
 **Caught by** the phase-4 `UNCLASSIFIED` ceiling on the first test run after the change — a gate
 written two phases earlier, which activated automatically when `harness.PHASE` became 4.
+
+---
+
+## 2026-08-27 — `.env` was never loaded, so a working API key was invisible for five phases
+
+**Symptom.** The user set `GEMINI_API_KEY` and the harness still reported `mode=offline` with a
+stub proposing. No error.
+
+**Diagnosis.** `.env.example` documented every variable, `.gitignore` excluded `.env`, and
+`scripts/check_secrets.py` told anyone who tripped it to "move the value into .env and reference
+it from os.environ" — and **nothing in the codebase ever read `.env`**. Every lookup was a bare
+`os.environ.get`, so a key sitting in the file was invisible. The failure was silent: no error,
+just a stub quietly standing in.
+
+Two compounding effects. The key had been unreachable since Phase 0, so five phases of "no
+credential exists" was partly self-inflicted. And the user's `.env` still carried
+`FINCTL_LLM_MODEL=claude-opus-5` from before the provider swap, which would have sent a Claude
+model string to Gemini.
+
+**Fix.** A stdlib loader in `core/config.py`, called from every entry point and idempotent — a
+loader that must be called in exactly one place is a loader that will be missed, which is how
+this survived. Real environment variables win over the file, so `DEMO_MODE=0 make eval` overrides
+it and a deployed environment's injected secrets are never shadowed by a stale file in the image.
+
+**Metric before → after.** LLM mode `offline` → `live`; 0 real model responses → 2.
+
+---
+
+## 2026-08-27 — blind retry on 503 burned a 20-per-day API quota
+
+**Symptom.** After the loader fix, the first cold run died on
+`429 RESOURCE_EXHAUSTED: quota exceeded, limit: 20, model: gemini-3.7-flash` before reaching all
+four narration shapes. The full cold run could not be completed.
+
+**Diagnosis.** `gemini-3.7-flash` was returning `503 UNAVAILABLE: high demand` persistently. My
+retry loop treated that as worth hammering with exponential backoff — and **every attempt spends
+a unit of a 20-request daily allowance**. A capacity problem was converted into a quota problem.
+One probe call alone took 82.4 seconds and 4 retries to succeed; the SDK also retries internally
+beneath mine, multiplying it.
+
+Two distinct defects: a per-day 429 was retried as if transient, and the provider's own
+`retryDelay: 19s` hint was ignored in favour of a guess.
+
+**Fix.** A 429 whose quota is per-day now fails immediately with that stated as the reason —
+retrying cannot help. And `retryDelay` is honoured when the provider offers one.
+
+**Metric before → after.** Cold run: incomplete, quota spent, 2 of 3 model-requiring narration
+shapes reached. Not recoverable until the daily quota resets — which is itself the honest answer
+about what running this costs.
+
+**Worth stating plainly:** the 82-second first call and the 20-per-day ceiling are facts about
+operating this system, not noise around it. They are reported in `METRICS.md` separately from
+calls-per-100, because calls-per-100 is a cost measure and latency under load is not.

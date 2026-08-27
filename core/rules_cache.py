@@ -61,6 +61,11 @@ class Rule:
     name: str
     pattern: str
     promoted_from: str | None = None
+    # Who authored it: "google-gemini/gemini-3.7-flash", "offline_stub", or None for a seeded
+    # rule. A promoted rule OUTLIVES the response that produced it -- once cached, the narration
+    # is handled without a call and the fixture is never read again -- so this is the only
+    # durable record of which model's work is doing the extracting.
+    source: str | None = None
 
     def extract(self, narration: str) -> str | None:
         match = re.search(self.pattern, narration)
@@ -95,6 +100,14 @@ class RulesCache:
     @property
     def promoted(self) -> list[Rule]:
         return [rule for rule in self._rules if rule.promoted_from is not None]
+
+    def promoted_by_source(self) -> dict[str, int]:
+        """How many cached rules each author contributed. Sorted for stable reporting."""
+        counts: dict[str, int] = {}
+        for rule in self.promoted:
+            key = rule.source or "unknown"
+            counts[key] = counts.get(key, 0) + 1
+        return dict(sorted(counts.items()))
 
     def extract(self, narration: str) -> tuple[str, str] | None:
         """First rule that fires wins. Returns `(reference, rule_name)`, or None."""
@@ -137,13 +150,21 @@ class RulesCache:
                     "references on every unparsed credit"
                 )
 
-    def promote(self, pattern: str, *, example: str, expected: str, name: str) -> Rule:
+    def promote(
+        self,
+        pattern: str,
+        *,
+        example: str,
+        expected: str,
+        name: str,
+        source: str | None = None,
+    ) -> Rule:
         """Validate and cache. Raises `PromotionRejected` if it does not pass."""
         self.validate(pattern, example=example, expected=expected)
         if any(rule.pattern == pattern for rule in self._rules):
             raise PromotionRejected("pattern is already cached")
 
-        rule = Rule(name=name, pattern=pattern, promoted_from=example)
+        rule = Rule(name=name, pattern=pattern, promoted_from=example, source=source)
         self._rules.append(rule)
         return rule
 
@@ -152,7 +173,12 @@ class RulesCache:
     def to_json(self) -> str:
         return json.dumps(
             [
-                {"name": r.name, "pattern": r.pattern, "promoted_from": r.promoted_from}
+                {
+                    "name": r.name,
+                    "pattern": r.pattern,
+                    "promoted_from": r.promoted_from,
+                    "source": r.source,
+                }
                 for r in self._rules
             ],
             indent=2,
@@ -175,6 +201,7 @@ class RulesCache:
                     name=entry["name"],
                     pattern=entry["pattern"],
                     promoted_from=entry.get("promoted_from"),
+                    source=entry.get("source"),
                 )
                 for entry in payload
             ]

@@ -45,11 +45,14 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+from core.config import load_dotenv
 
 __all__ = [
     "DEFAULT_MODEL",
@@ -58,6 +61,7 @@ __all__ = [
     "USD_PER_MTOK_OUT",
     "CallBudgetExceeded",
     "CacheMiss",
+    "ProposerUnavailable",
     "ExceptionExplanation",
     "NarrationParse",
     "Proposer",
@@ -88,6 +92,10 @@ class CallBudgetExceeded(RuntimeError):
 
 class CacheMiss(RuntimeError):
     """A replay run needed a response that is not on disk."""
+
+
+class ProposerUnavailable(RuntimeError):
+    """The provider kept failing transiently and the retry budget ran out."""
 
 
 # --- structured output schemas -------------------------------------------------------------
@@ -135,6 +143,11 @@ class ProposerStats:
     stub_responses: int = 0
     modes_used: set[str] = field(default_factory=set)
     provider: str = "-"
+    retries: int = 0
+    # Seconds actually spent sleeping between retries. Reported apart from the call count
+    # because a provider under load dominates wall clock without changing cost at all.
+    retry_wait_s: float = 0.0
+    real_responses: int = 0
     # The version the provider reported serving. Recorded per run because "which model produced
     # this" is provenance, not trivia, and an alias can move under you between runs.
     model_versions: set[str] = field(default_factory=set)
@@ -175,6 +188,24 @@ def prompt_key(*, schema: str, model: str, system: str, user: str) -> str:
 
 
 # --- proposers ------------------------------------------------------------------------------
+
+
+def _retry_after_seconds(error: Exception | None) -> float | None:
+    """Pull the provider's own retry hint out of an error, if it offered one.
+
+    Google returns a `RetryInfo` detail with `retryDelay: "19s"`. Honouring it beats guessing.
+    Returns None when absent or implausible, so the caller falls back to its own backoff.
+    """
+    if error is None:
+        return None
+    match = re.search(r"[\"']retryDelay[\"']:\s*[\"'](\d+(?:\.\d+)?)s", str(error))
+    if match is None:
+        match = re.search(r"retry in (\d+(?:\.\d+)?)s", str(error))
+    if match is None:
+        return None
+    seconds = float(match.group(1))
+    # A hint beyond a minute means "come back later", not "sleep here".
+    return seconds if 0 < seconds <= 60 else None
 
 
 class OfflineProposer:
@@ -304,12 +335,14 @@ class Proposer:
         fixture_dir: Path,
         call_budget: int,
         model: str = DEFAULT_MODEL,
+        max_retries: int = 2,
     ) -> None:
         self.mode = mode
         self.model = model
         self._inner = inner
         self._fixture_dir = fixture_dir
         self._call_budget = call_budget
+        self._max_retries = max_retries
         self.stats = ProposerStats()
         self.stats.modes_used.add(mode)
 
@@ -327,6 +360,8 @@ class Proposer:
             self.stats.model_versions.add(record.get("model_version", record.get("model", "-")))
             if record.get("source") == STUB_SOURCE:
                 self.stats.stub_responses += 1
+            else:
+                self.stats.real_responses += 1
             return SCHEMAS[schema].model_validate(record["response"])
 
         if self.mode == "replay":
@@ -344,7 +379,7 @@ class Proposer:
                 "asking would report a coverage number it did not earn."
             )
 
-        payload = self._inner.propose(schema=schema, system=system, user=user)
+        payload = self._call_with_retries(schema=schema, system=system, user=user)
         usage = payload.pop("_usage", {"input_tokens": 0, "output_tokens": 0})
         served = payload.pop("_model_version", self.model)
         self.stats.model_versions.add(served)
@@ -357,6 +392,8 @@ class Proposer:
         self.stats.output_tokens += int(usage.get("output_tokens", 0))
         if self._inner.name == STUB_SOURCE:
             self.stats.stub_responses += 1
+        else:
+            self.stats.real_responses += 1
 
         validated = SCHEMAS[schema].model_validate(payload)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -380,13 +417,74 @@ class Proposer:
         return validated
 
 
+    def _call_with_retries(self, *, schema: str, system: str, user: str) -> dict[str, Any]:
+        """Bounded retries on transient provider failures only.
+
+        Added after a live run hit `503 UNAVAILABLE: This model is currently experiencing high
+        demand`. `FINCTL_LLM_MAX_RETRIES` had been documented in `.env.example` since Phase 0 and
+        was never implemented — the 503 is what surfaced it.
+
+        **Retries transient failures, never permanent ones.** A 5xx or a 429 may succeed on the
+        next attempt; a 400 (malformed request) or 403 (bad key) will fail identically forever, and
+        retrying it burns the budget while hiding the real error behind a timeout.
+
+        The sleep introduces wall-clock variance but no output variance: what gets cached is the
+        response, so replay is unaffected.
+        """
+        from google.genai import errors
+
+        attempt = 0
+        last_error: Exception | None = None
+        while True:
+            try:
+                return self._inner.propose(schema=schema, system=system, user=user)
+            except errors.ClientError as error:
+                # 4xx. Will not fix itself; surface it immediately rather than after N sleeps.
+                if "429" not in str(error):
+                    raise
+                # A 429 is a 4xx that CAN be transient -- but only if the exhausted quota
+                # refills soon. A per-DAY quota does not, and retrying it burns the little
+                # remaining allowance while reporting nothing new. Learned the hard way: blind
+                # backoff on 503s consumed a 20-request daily free-tier allowance, turning a
+                # capacity problem into a quota problem and costing the run.
+                message = str(error)
+                if "PerDay" in message or "per day" in message.lower():
+                    raise ProposerUnavailable(
+                        "daily quota exhausted; retrying cannot help because the allowance does "
+                        f"not refill within any sane backoff. Original error: {message[:300]}"
+                    ) from error
+                if attempt >= self._max_retries:
+                    raise ProposerUnavailable(
+                        f"rate limited after {attempt} retries: {error}"
+                    ) from error
+                last_error = error
+            except errors.ServerError as error:
+                if attempt >= self._max_retries:
+                    raise ProposerUnavailable(
+                        f"provider unavailable after {attempt} retries. The run is failed rather "
+                        f"than completed with partial adjudication: {error}"
+                    ) from error
+                last_error = error
+
+            attempt += 1
+            self.stats.retries += 1
+            # Respect the server's own hint when it gives one. Guessing a backoff while the
+            # provider is explicitly saying "retry in 19s" is both ruder and less effective, and
+            # on a metered tier every premature attempt is a wasted unit of quota.
+            delay = _retry_after_seconds(last_error) or 2**attempt
+            self.stats.retry_wait_s += delay
+            time.sleep(delay)
+
+
 def build_proposer(
     *,
     fixture_dir: Path | None = None,
     call_budget: int | None = None,
     model: str | None = None,
+    max_retries: int | None = None,
 ) -> Proposer:
     """Pick a mode from the environment, explicitly. Never guesses its way onto the network."""
+    load_dotenv()
     demo = os.environ.get("DEMO_MODE", "0") == "1"
     has_key = bool(
         os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -396,6 +494,11 @@ def build_proposer(
         os.environ.get("FINCTL_LLM_FIXTURE_DIR", "fixtures/llm")
     )
     budget = call_budget or int(os.environ.get("FINCTL_LLM_CALL_BUDGET", "25"))
+    retries = (
+        max_retries
+        if max_retries is not None
+        else int(os.environ.get("FINCTL_LLM_MAX_RETRIES", "2"))
+    )
 
     if demo:
         return Proposer(
@@ -408,6 +511,7 @@ def build_proposer(
             fixture_dir=directory,
             call_budget=budget,
             model=resolved_model,
+            max_retries=retries,
         )
     return Proposer(
         mode="offline",
@@ -415,4 +519,5 @@ def build_proposer(
         fixture_dir=directory,
         call_budget=budget,
         model=resolved_model,
+        max_retries=retries,
     )

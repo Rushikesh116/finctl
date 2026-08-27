@@ -2,16 +2,19 @@
   {
     "name": "seed_neft_utr",
     "pattern": "UTR([A-Za-z0-9]{8,})",
-    "promoted_from": null
+    "promoted_from": null,
+    "source": null
   },
   {
     "name": "promoted_1",
-    "pattern": "IMPS/([A-Za-z0-9]{8,40})/RAZ",
-    "promoted_from": "IMPS/1888481283mjoasu/RAZORPAY SOFTWARE"
+    "pattern": "^RTGS CR REF ([A-Za-z0-9]+) RAZORPAY$",
+    "promoted_from": "RTGS CR REF 1552002271luumnm RAZORPAY",
+    "source": "google-gemini/gemini-3.7-flash"
   },
   {
     "name": "promoted_2",
-    "pattern": "RTGS\\ CR\\ REF\\ ([A-Za-z0-9]{8,40})\\ RAZ",
-    "promoted_from": "RTGS CR REF 1552002271luumnm RAZORPAY"
+    "pattern": "IMPS/([A-Za-z0-9]{8,40})/RAZ",
+    "promoted_from": "IMPS/18269471181lnxld/RAZORPAY SOFTWARE",
+    "source": "offline_stub/gemini-3.7-flash"
   }
 ]
