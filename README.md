@@ -24,9 +24,40 @@ make setup
 make demo     # seed + run + eval + report, from clean, with no API key set
 ```
 
-`make demo` is the one command a judge runs. It works on a clean clone with no
-`ANTHROPIC_API_KEY`, because Layer 4's LLM responses replay from committed fixtures keyed
-by prompt hash.
+`make demo` is the one command a judge runs. It works on a clean clone with no API key set,
+because Layer 4's LLM responses replay from committed fixtures keyed by prompt hash. Verified
+by actually cloning into an empty directory with no `.env` present, not by testing in the
+working tree.
+
+## Deploy
+
+The container is the unit of deployment, and `render.yaml` only tells Render how to run it —
+so the same image goes to Railway, Fly, or anything else that speaks Docker without change.
+
+```bash
+docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t finctl .
+docker run -p 8010:8000 finctl          # then GET localhost:8010/healthz
+```
+
+Render picks up `render.yaml` as a Blueprint: **New → Blueprint → select this repo → Apply.**
+Nothing else to configure, and no secret to paste — `DEMO_MODE=1` is the deployed default and
+`GEMINI_API_KEY` is deliberately left unset (see the comment in `render.yaml`).
+
+Two things the deployment gets right that are easy to get wrong:
+
+- **The port comes from the platform.** `PORT` is honoured by both the server and the Docker
+  health check. Render assigns `10000`; a health check pinned to `8000` would mark a working
+  container unhealthy.
+- **The image reports its own provenance.** It carries no `.git`, and no platform passes Docker
+  build args from a blueprint, so `/healthz` reads the commit from `RENDER_GIT_COMMIT` or
+  `RAILWAY_GIT_COMMIT_SHA`. A deployed service that cannot say which code produced its numbers
+  is not auditable.
+
+`/healthz` returns the dataset SHA and git SHA it is serving, not just `ok`, so a healthy
+container serving stale data is distinguishable from one that is not. `GET /api/run` for the
+whole run; `GET /api/exceptions` for the queue. `?dataset=holdout_seed_97` returns **403** by
+design — the holdout is evaluated once and reported, and an endpoint that re-ran it on request
+would turn it into a development set the first time anyone refreshed.
 
 ## The problem
 
