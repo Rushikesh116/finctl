@@ -1,20 +1,21 @@
 # FinCtl
 
+| | |
+|---|---|
+| **Static report — live now** | **<https://rushikesh116.github.io/finctl/>** |
+| **Live API + UI** | *not yet deployed — see [Deploy](#deploy). No URL is listed here until one answers.* |
+
 **An AI finance controller for payment reconciliation.** Given a merchant's order ledger, a
 payment gateway's records, and a bank statement, FinCtl determines which records match,
 which do not, and why — then reports **measured** accuracy on a held-out dataset.
 
-> **Status: Phase 0 of 7 — repository and memory scaffold.** This README is written in
-> Phase 7 and is a placeholder until then. It carries no results yet, because no run has
-> happened yet. Every number here will be pasted from command output; see
-> `docs/METRICS.md`.
+The static report has the whole run inlined — no server, no fetch, no build step — so the
+numbers stay readable whether or not the live service is awake.
 
-<!-- Phase 6 puts the live URL and the GitHub Pages URL here, above everything else. -->
-
-| | |
-|---|---|
-| **Live demo** | TBD (Phase 6) |
-| **Static report** | TBD (Phase 6, GitHub Pages) |
+> **Status: Phase 6 of 7.** Measured on `dev_seed_11`: **76.2% auto-matched, 0.00% false
+> matches**, 133 exceptions, 0 unclassified. The held-out dataset is evaluated **once**, and
+> that result is reported in `docs/METRICS.md` — not here, and not before it is run. Every
+> number in this repo is pasted from command output.
 
 ## Run it
 

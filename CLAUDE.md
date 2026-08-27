@@ -23,9 +23,10 @@ Then read the local skill that covers what you are about to change:
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.
 
-**Current phase: Phase 5 complete. 76.2% auto-match, 0.00% false matches. Next is Phase 6 —
-UI, static report, deploy, and the single holdout evaluation.** `docs/PROGRESS.md` is authoritative; if it disagrees with this line, it
-wins.
+**Current phase: Phase 6. 76.2% auto-match, 0.00% false matches. Static report is live at
+<https://rushikesh116.github.io/finctl/>. Remaining: the hosted API deploy, the designed UI,
+and the single holdout evaluation.** `docs/PROGRESS.md` is authoritative; if it disagrees with
+this line, it wins.
 
 ---
 
@@ -115,7 +116,11 @@ transitive closure.
 
 **Provider: Google Gemini, model `gemini-3.7-flash`** (D-0025). `temperature` is not set: determinism comes from the fixture cache, which was always the real mechanism (D-0004).
 
-**No call has ever reached a model API** — no credential exists for either provider. Every LLM figure in this repo came from `OfflineProposer` and is tagged `offline_stub`.
+**Real calls were made in Phase 5** against `gemini-3.7-flash`. Two narration shapes were
+served live before the free-tier quota (20/day) was exhausted; the rest of the fixture set is
+still `offline_stub`, so runs are tagged **MIXED** and the metrics block says so. One
+model-proposed regex was **accepted** by the promotion gate and one was **rejected** — the
+rejection is the more valuable row, and it was not tuned away.
 
 ---
 
