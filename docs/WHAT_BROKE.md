@@ -182,7 +182,7 @@ it has now caught a real bug twice.
 
 # The recurring failure: a test that passes while asserting the wrong thing
 
-Four separate instances now, which makes it the dominant failure mode of this project — more
+Five separate instances now, which makes it the dominant failure mode of this project — more
 common than any bug in the reconciliation logic itself. Grouping them here because the pattern
 is the finding, not any individual case.
 
@@ -200,6 +200,8 @@ state directly, so a proxy is inviting:
 - "no record is lost or double-counted" → proxied by a *sum*
 - "the holdout is evaluated once" → proxied by *a sentence in three documents*
 - "pathology 7 is refused" → proxied by *a ground-truth label*
+- "the deployed image reports its provenance" → proxied by *an environment configured to make the
+  assertion pass*
 
 Each proxy is reasonable. Each is also satisfiable without the property holding.
 

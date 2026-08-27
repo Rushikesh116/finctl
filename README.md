@@ -3,118 +3,443 @@
 | | |
 |---|---|
 | **Live API + UI** | **<https://finctl.onrender.com>** — [`/healthz`](https://finctl.onrender.com/healthz) · [`/api/run`](https://finctl.onrender.com/api/run) · [`/api/exceptions`](https://finctl.onrender.com/api/exceptions) |
-| **Static report** | **<https://rushikesh116.github.io/finctl/>** — whole run inlined, no server, no fetch |
+| **Static report** | **<https://rushikesh116.github.io/finctl/>** — the whole run inlined, no server, no script, no network requests |
 
 Free tier, so the first request after an idle period cold-starts. The static report is the
 zero-infrastructure fallback: if the service is asleep, the numbers are still readable.
-
-**An AI finance controller for payment reconciliation.** Given a merchant's order ledger, a
-payment gateway's records, and a bank statement, FinCtl determines which records match,
-which do not, and why — then reports **measured** accuracy on a held-out dataset.
-
-The static report has the whole run inlined — no server, no fetch, no build step — so the
-numbers stay readable whether or not the live service is awake.
-
-> **Status: Phase 6 of 7.** Measured on `dev_seed_11`: **76.2% auto-matched, 0.00% false
-> matches**, 133 exceptions, 0 unclassified. The held-out dataset is evaluated **once**, and
-> that result is reported in `docs/METRICS.md` — not here, and not before it is run. Every
-> number in this repo is pasted from command output.
-
-## Run it
 
 ```bash
 make setup
 make demo     # seed + run + eval + report, from clean, with no API key set
 ```
 
-`make demo` is the one command a judge runs. It works on a clean clone with no API key set,
-because Layer 4's LLM responses replay from committed fixtures keyed by prompt hash. Verified
-by actually cloning into an empty directory with no `.env` present, not by testing in the
-working tree.
+`make demo` is the one command to run. It works on a fresh clone with no `.env` and no key,
+because Layer 4's model responses replay from committed fixtures keyed by prompt hash. Verified by
+actually cloning into an empty directory, not by testing in the working tree.
 
-## Deploy
+---
 
-The container is the unit of deployment, and `render.yaml` only tells Render how to run it —
-so the same image goes to Railway, Fly, or anything else that speaks Docker without change.
+## What it does
 
-```bash
-docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t finctl .
-docker run -p 8010:8000 finctl          # then GET localhost:8010/healthz
+FinCtl reconciles three descriptions of the same money — a merchant's order ledger, a payment
+gateway's transaction records, and a bank statement — and decides which records belong together.
+Payment gateways do not settle transactions one at a time; they settle in **net batches**, so a
+single bank credit is the arithmetic result of many payments netted against refunds, fees, GST and
+adjustments. That makes reconciling a bank line **set reconstruction against a single scalar**
+rather than row-to-row matching, which is why a join on reference alone leaves roughly a quarter of
+the work undone. Every proposed match — including every one a language model suggests — must pass
+an independent arithmetic re-check before it can enter the ledger, and anything that fails is
+declined with its evidence attached.
+
+### Why this is not a join
+
+A real batch from the dev dataset, `setl_000014`. The bank shows **one** credit:
+
+```
+Rs 11,36,043.36    value date 2026-03-27 IST
+narration: NEFT-RAZORPAYSOFTWARE-UTR1518846479r5bne1-STL
 ```
 
-Render picks up `render.yaml` as a Blueprint: **New → Blueprint → select this repo → Apply.**
-Nothing else to configure, and no secret to paste — `DEMO_MODE=1` is the deployed default and
-`GEMINI_API_KEY` is deliberately left unset (see the comment in `render.yaml`).
+Four gateway rows carry that settlement id. A trivial join finds exactly these:
 
-Two things the deployment gets right that are easy to get wrong:
+```
+row          type       credit          fee_base      GST       net contribution
+gw_000135    payment    Rs 1,40,254.00  Rs 2,805.08   Rs 504.91   Rs 1,36,944.01
+gw_000136    payment    Rs 1,80,483.00  Rs 3,609.66   Rs 649.74   Rs 1,76,223.60
+gw_000137    payment    Rs 1,23,855.00  Rs 2,477.10   Rs 445.88   Rs 1,20,932.02
+gw_000138    payment    Rs 1,35,903.00  Rs 2,718.06   Rs 489.25   Rs 1,32,695.69
+                                                          TOTAL   Rs 5,66,795.32
+```
 
-- **The port comes from the platform.** `PORT` is honoured by both the server and the Docker
-  health check. Render assigns `10000`; a health check pinned to `8000` would mark a working
-  container unhealthy.
-- **The image reports its own provenance.** It carries no `.git`, and no platform passes Docker
-  build args from a blueprint, so `/healthz` reads the commit from `RENDER_GIT_COMMIT` or
-  `RAILWAY_GIT_COMMIT_SHA`. A deployed service that cannot say which code produced its numbers
-  is not auditable.
+**The join accounts for 49.9% of the credit.**
 
-`/healthz` returns the dataset SHA and git SHA it is serving, not just `ok`, so a healthy
-container serving stale data is distinguishable from one that is not. `GET /api/run` for the
-whole run; `GET /api/exceptions` for the queue. `?dataset=holdout_seed_97` returns **403** by
-design — the holdout is evaluated once and reported, and an endpoint that re-ran it on request
-would turn it into a development set the first time anyone refreshed.
+```
+Rs 11,36,043.36  (bank)  −  Rs 5,66,795.32  (joined)  =  δ  Rs 5,69,248.04
+```
 
-## The problem
+The other half of the money is in rows whose `settlement_id` is **null**. Nothing links them to
+this batch — that is the whole difficulty. They sit in an unassigned pool, and the question is
+which subset of that pool sums to δ:
 
-Three sources describe the same money: the merchant's ledger, the gateway's records, and
-the bank statement. Reconciling them is not a join, because **gateways settle in net
-batches** — one bank credit is the arithmetic result of many payments netted against
-refunds, fees, GST on those fees, chargebacks and adjustments. So reconciling a bank line
-is **set reconstruction against a single scalar**, not row-to-row matching.
+```
+gw_000139   Rs 1,13,151.09
+gw_000140   Rs 1,48,674.48      exactly one subset closes δ, and it is all four:
+gw_000141   Rs 1,94,461.78      1,13,151.09 + 1,48,674.48 + 1,94,461.78 + 1,12,960.69
+gw_000142   Rs 1,12,960.69                                  =  Rs 5,69,248.04
+```
 
-## Architecture
+So the bank line is explained by **eight** rows, four of which no key connects to it. There is no
+join that finds them; you have to search, bounded, and be willing to say "I don't know" when more
+than one subset fits. On this dataset that search is what takes auto-matching from 58.2% to 71.3%.
 
-A four-layer cascade, each layer handing on only what it could not resolve:
+Money is integer paise everywhere — never a float, never a `Decimal` round trip — and is formatted
+to rupees only in the renderer. `fee_base` is GST-exclusive and `gst` is its GST, because the
+gateway's own `fee` field is GST-*inclusive* and reusing that ambiguous word is how a rounding
+error becomes a reconciliation error.
 
-| Layer | Job |
-|---|---|
-| 1 — exact | Match on bank reference, payment id, order id |
-| 2 — netting | Check the settlement balance identity; if δ ≠ 0, **bounded** subset search for δ |
-| 3 — fuzzy | Candidate generation, then globally optimal assignment. **Refuse** when best and second-best are within the margin |
-| 4 — LLM | Adjudicate the residue (target < 5%), always behind an independent verifier |
-
-Three things to know about it, all expanded in Phase 7:
-
-- **The LLM proposes; a deterministic verifier disposes.** No LLM output reaches the matched
-  ledger directly. A hallucinated match cannot enter the ledger, and prompt injection
-  through untrusted bank narration cannot cause a false match — at worst it produces a
-  proposal the verifier rejects.
-- **The bounded search is a real stopping rule.** A node budget and a wall-clock timeout,
-  both configurable, that dump to a typed exception on overflow rather than running forever.
-- **Refusal is a feature.** Two customers, same amount, same day, no distinguishing key
-  gets flagged `AMBIGUOUS` with an explanation. A system that confidently matches an
-  ambiguous pair has great coverage and terrible precision.
+---
 
 ## Results
 
-TBD — Phase 6. The full metrics block, including the **false-match rate** and the
-deterministic / +fuzzy / +LLM ablation table, will be pasted here verbatim from
-`make eval`. Whatever the holdout prints is what ships, even if it is worse than dev.
+Measured on `dev_seed_11`, 558 records. Pasted from `make eval` — no number in this repository is
+typed by hand.
+
+```
+Dataset: dev_seed_11  data 1115450f   SHA: 881f752   2026-08-27 15:07
+Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
+  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations
+    now resolve via the promoted regex, so their fixtures are never consulted and the model does
+    not appear above. Its contribution moved from the response cache into the rules cache, which
+    is what promotion is for.
+Records processed         558          Wall clock    0.267s
+Auto-matched              425    76.2%   Throughput   2090 rec/s
+  Layer 1  exact            325    58.2%
+  Layer 2  netting           73    13.1%
+  Layer 3  fuzzy              0     0.0%
+  Layer 4  LLM+verified      27     4.8%
+False matches               0    0.00%   <- precision, not coverage
+Exceptions                133    23.8%    Rs 1,14,61,299.74 at risk
+  correctly flagged        94    70.7%
+  missed matches           39    29.3%
+  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32,
+           UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
+  by class: absent 56, undetermined 38
+LLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 from cache)
+  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold
+    rate. The last cold attempt was terminated by provider quota exhaustion.
+Rules cache                 3 rules   2 promoted from narration the seeded regex missed
+  authored by: google-gemini/gemini-3.7-flash x1, offline_stub/gemini-3.7-flash x1
+Audit ledger               42 entries   head 51b54deedc60
+By mechanism  (delta != 0 batches; refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0
+  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0
+  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1
+Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose)
+  P7 record-level tie            8/8    records   100.0%
+  M5 batch subset ambiguity      2/2    batches   100.0%
+By pathology  (records carry >=1, so these OVERLAP and do not sum to 558)
+  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24
+  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14
+```
+
+Each ablation arm is a **real run** on the same dataset, not a subtraction:
+
+```
+  arm                  auto-match   false-match   exceptions   UNCLASSIFIED
+  exact only (L1)          58.2%         0.00%          233             94
+  + netting (L2)           71.3%         0.00%          160              4   +13.1pp
+  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp
+  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp
+```
+
+The false-match rate is on every arm deliberately: an arm that raises coverage while also raising
+false matches is a regression being sold as an improvement.
+
+Three things in that table are worth reading as results rather than as noise:
+
+- **Layer 3 contributes 0.0pp.** The globally-optimal assignment layer resolves nothing on this
+  dataset. It is reported at zero rather than quietly removed, and the UI draws its bar at the same
+  width as the layer above it.
+- **`SUBSET_SEARCH_EXHAUSTED 13`** is the bounded search visibly giving up. The track asks for a
+  stopping rule; this is it firing, on one batch whose pool exceeds the node budget.
+- **`missed matches 39`** — 29.3% of exceptions are records that *could* have been matched. That is
+  the honest cost of a zero-tolerance verifier and margin-zero refusal.
+
+---
+
+## Architecture
+
+Three sources, four layers, each handing on only what it could not resolve.
+
+| Layer | Job | Resolved |
+|---|---|---|
+| 1 `core/identity.py` | Exact match on bank reference, payment id, order id | 325 |
+| 2 `core/settlement.py` | Check the batch identity; if δ ≠ 0, **bounded** subset search for δ | 73 |
+| 3 `core/assignment.py` | Candidate generation, then `linear_sum_assignment` for a globally optimal one-to-one assignment | 0 |
+| 4 `core/adjudicate.py` | Model on the residue: parse narration, split reason codes, draft explanations | 27 |
+
+**The verifier boundary is the load-bearing design decision.** `core/verifier.py` is the only
+module that can turn a proposal into a match. Every layer — including Layer 4 — emits a
+`GroupProposal`, and the verifier independently recomputes the settlement identity at **zero
+tolerance** before approving. Two consequences follow, and both are structural rather than
+promised:
+
+- A hallucinated match cannot enter the ledger. It fails arithmetic the model does not perform.
+- Prompt injection through bank narration cannot cause a false match. Narration is untrusted
+  third-party text; the worst an injected instruction achieves is a proposal the verifier rejects.
+  Every reference a model extracts is additionally checked against the set of real settlement UTRs
+  before use, so an invented reference is inert.
+
+Layer 3 is where false matches would enter if anywhere, because it pairs ledger rows to gateway
+payments with no bank credit in the relation — so the obvious implementation approves on *cost*,
+which is not arithmetic at all. It does not:
+
+> **Arithmetic is still zero-tolerance** (D-0024). A candidate must satisfy exact amount equality,
+> exact currency, and an order preceding its payment. `core/verifier.py` re-checks all three.
+> **Cost decides which candidate is proposed; it never decides whether a proposal is accepted.**
+> So Layer 3 cannot produce a group whose money does not add up — only one whose money adds up and
+> whose counterparty is wrong. That residual attribution risk is real, and the before/after
+> false-match rate is the instrument for it.
+
+Measured before and after Layer 3 on the same dataset SHA: **0.00% → 0.00%**.
+
+**Refusal is a feature.** A system that confidently matches an ambiguous pair has excellent
+coverage and terrible precision. The ambiguity margin is **zero** — refuse on an exact tie —
+pre-registered in `DECISIONS.md` before the layer existed, specifically so it could not be tuned
+against dev results. Ambiguity is detected by *necessity*: forbid an assigned pair, re-solve, and
+if the optimum is unchanged that pair was never determined. Every refusal carries its evidence:
+`AMBIGUOUS` records all four pairings of a 2×2 tie, and an M5 batch refusal records the subsets
+that each close δ, with a truncation flag when there are more than five.
+
+Every decision lands in a hash-chained append-only audit ledger with **no wall-clock field**, so
+the same seed and inputs produce a byte-identical log and a run is replayable.
+
+---
+
+## AI judgment
+
+**Calls per 100 records: 0.00 on replay**, all 6 responses from cache. The cold rate prints
+`not measured` rather than an estimate, because the cold run was terminated by quota exhaustion.
+
+The model's job is deliberately narrow: it **writes rules, it does not participate in every run**.
+Asked about a bank narration shape no regex handles, it returns a candidate regex, which is
+validated and cached — so that shape costs nothing from then on. The call curve falls as the cache
+fills, which is the point.
+
+Promotion is validated, not trusted. A proposed regex must compile, expose exactly one capture
+group, capture exactly the expected reference, and match **none** of the negative examples.
+
+### The gate rejecting real model output
+
+| Narration | Source | Proposed regex | Verdict |
+|---|---|---|---|
+| `NEFT-RAZORPAYSOFTWARE-UTR…-STL` | seeded rule | — | resolved, **no call needed** |
+| `IMPS/1888481283mjoasu/RAZORPAY SOFTWARE` | **real model** | `^IMPS/([a-zA-Z0-9]+)/` | **REJECTED** |
+| `RTGS CR REF 1552002271luumnm RAZORPAY` | **real model** | `^RTGS CR REF ([A-Za-z0-9]+) RAZORPAY$` | **ACCEPTED** |
+| `NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT` | — | — | **not reached — quota exhausted** |
+
+The rejection is the valuable row. The model extracted `1888481283mjoasu` correctly and proposed a
+regex that is correct *for its own example*. The gate refused it:
+
+```
+pattern also matches a narration with no reference
+('IMPS/SETTLEMENT/CR' -> 'SETTLEMENT'); a rule this broad would
+ invent references on every unparsed credit
+```
+
+Had it been cached, every future unparsed credit reading `IMPS/SETTLEMENT/CR` would have had
+`SETTLEMENT` attached as its settlement reference — permanently, silently, and to every batch. The
+failing shape was predicted by a hand-written test before any API key existed, and the model
+produced exactly that shape.
+
+The acceptance is readable and safe: `^RTGS CR REF ([A-Za-z0-9]+) RAZORPAY$` is anchored on **both**
+sides, `$` included, so no reference-free narration can match it. It is now in the rules cache
+stamped with its author, because a promoted rule outlives the response that produced it.
+
+**The finding underneath both rows: the model reported confidence 95 on each.** Identical
+confidence for a pattern that is safe and one that would have poisoned the cache. Confidence
+carried no signal about the outcome — the gate did all the discriminating. Any design gating on
+`confidence >= 90` would have cached both.
+
+### Where using the model would be a regression
+
+`O-002` in `docs/OPEN_QUESTIONS.md`, logged as deliberately not built:
+
+> Asking the model which of two interchangeable candidates is correct. **Not built, and it should
+> not be:** pathology 7 is constructed so that *nothing in the data* discriminates. A model asked
+> to choose would produce a confident answer from no evidence, which is precisely the failure the
+> refusal exists to avoid. The verifier could not catch it either, because both candidates satisfy
+> the arithmetic. This is the one place where adding the model would make the system worse.
+
+Three more capabilities are logged the same way rather than built: learned amount tolerance
+(`O-003`) would move false-match risk from attribution into arithmetic; regex promotion for
+merchant references (`O-004`) would be capability with no test to justify it; per-exception
+explanations (`O-005`) would multiply calls tenfold for text that is largely identical.
+
+---
+
+## What broke
+
+The dominant failure mode of this project was not a bug in the reconciliation logic. It was
+**a test that passes while asserting the wrong thing** — five separate instances, which is more
+than any other category. The pattern is the finding, so it is grouped rather than scattered.
+
+**The shape.** A check is written, it passes, and the passing is taken as evidence. But the check
+tests a *proxy* for the property, the proxy and the property come apart later, and nothing fails.
+Confidence accrues that was never earned, and it accrues specifically in the area the check was
+supposed to protect. An absent check leaves a known gap; a wrong check closes it on paper.
+
+Every instance sits where the property is awkward to state directly, so a proxy is inviting:
+
+| The property | What was actually asserted |
+|---|---|
+| the bounded search is hard | *pool size* |
+| no record is lost or double-counted | a *sum* |
+| the holdout is evaluated once | *a sentence in three documents* |
+| pathology 7 is refused | *a ground-truth label* |
+| the deployed image reports its provenance | *an environment configured to make the assertion pass* |
+
+**1. M6's hardness proxied by pool size.** `assert pool_rows_min >= 40`, justified by reasoning
+about meet-in-the-middle. It passed for two phases while asserting nothing useful: for subset-sum
+the cost is the *depth* the answer sits at, not the candidate count. A 3-row answer among 44
+candidates is ~14k nodes, so the hard case resolved easily and `SUBSET_SEARCH_EXHAUSTED` never
+appeared. The bounded search — the thing the track specifically asks for — shipped two phases
+without ever being seen to stop. The test now computes the combinatorial cost of reaching the true
+subset and asserts it exceeds 10M.
+
+**2. The partition invariant proxied by a sum.** `auto_matched + exceptions == N`. A record in
+**both** places is counted twice, and if another is simultaneously lost the errors cancel exactly —
+the total reconciles over a set that is wrong in two directions at once. The invariant could not
+see the class of error it existed to catch. Found by accident, by a mutation test written to prove
+the *false-match detector* could fire; it has since caught a real bug in Layer 2. Disjointness is
+now checked independently, because one expression cannot carry both properties.
+
+**3. The holdout rule proxied by documentation.** `SPEC.md`, the eval protocol and `CLAUDE.md` all
+stated that the holdout is evaluated once, in Phase 6. The Phase 0 Makefile passed `--holdout` on
+every `make eval`, inert for two phases because no harness existed to honour it. The first real
+`make eval` evaluated the holdout. Three documents agreeing is not enforcement — the rule lived in
+prose and prose cannot run. `make eval` can no longer reach the holdout. **The one observation is
+disclosed rather than deleted**, in Limitations below.
+
+**4. Pathology 7 proxied by its label.** `P7 46/46` looked like the centrepiece working. It was
+measuring 14 perfectly matchable M5 batch rows, because Phase 1 mapped mechanism M5 to pathology 7
+— the spec says the two share a *principle*, and that became a shared *label*, so the population
+under measurement was mostly not the pathology. Underneath, the pathology's own data could not
+exercise it: the twins had **zero** same-amount gateway payments, so they were *unmatched*, not
+*ambiguous*, and no correct engine could have produced `AMBIGUOUS` against that data. And scoring a
+refusal as "did not match it" gives full marks for never reaching the record — `P7 8/8` became
+`0/8` once the metric required a *declared* `AMBIGUOUS`. A layer that did not yet exist was scoring
+100% on the pathology it was built to handle.
+
+**5. The deployed environment proxied by a convenient one.** The Dockerfile bakes
+`ARG GIT_SHA=unknown` into `FINCTL_GIT_SHA`, so on any platform that builds the image itself that
+default is always present — and the provenance fallback returned it, never reaching
+`RENDER_GIT_COMMIT` one entry later. The live service reported `git_sha: unknown`, exactly the gap
+the fallback was written to close. The test passed because it set the variable **blank**, a state no
+deployment produces. Two further reproduction attempts also missed, because those images were built
+*with* `--build-arg` and so had a real SHA baked. What caught it was the live URL. The suite was
+green at 274 tests.
+
+### The four habits that came out of it
+
+For each gate the question is not "does a test pass" but **"could this test pass while the property
+is false?"**
+
+1. **Mutation-test the check.** A guard never seen to fail has not been shown to work. Every guard
+   added since is verified by breaking the thing it guards.
+2. **Assert the property, not a stand-in.** Where the property is combinatorial, compute it.
+3. **Prefer the strict reading of any metric.** Where "correct" could mean *avoided a wrong answer*
+   or *gave the right answer for the right reason*, report the second. The first flatters exactly
+   the components that do not exist yet.
+4. **Reproduce in the environment that has the bug, not the one that is easy to build.** If a check
+   needs environment variables or build flags set, those settings are part of the claim.
+
+Other failures are logged as they happened in `docs/WHAT_BROKE.md`, with the metric on both sides:
+a subset search that double-counted solutions and **manufactured false ambiguity** (which scores as
+success); a record that ended up both matched and excepted because a single pass let iteration
+order decide; a change made to give Layer 3 work that took `UNCLASSIFIED` from 4 to 42; a `.env`
+that was never loaded, leaving a working API key invisible for five phases; and a blind retry on
+`503` that converted a capacity problem into a quota problem and spent a 20-per-day allowance.
+
+---
 
 ## Limitations
 
-TBD — Phase 7, and it will be specific. The honest ones already known:
+Stated plainly, because a submission graded on measured accuracy should be equally precise about
+what the measurement does not cover.
 
-- The settlement netting identity is FinCtl's construct; no gateway publishes a closed-form
-  formula. Reported accuracy measures the matcher against *our model of the domain*
-  (`docs/OPEN_QUESTIONS.md` Q-005).
-- Pathologies 10, 11 and 12 rest on undocumented mechanics (Q-006, Q-007, Q-010).
-- **`transfer` rows — Route split-payment legs — are out of scope.** They are a documented
-  quarter of the recon `type` enum, but no fetched document defines their settlement
-  semantics, so generating them would mean measuring accuracy against an invented shape
-  (Q-008, D-0012).
-- No live gateway call is made in any phase, in either direction.
+**The data is synthetic, and it satisfies my own model of the domain.** This is the central
+limitation and it bounds every number above. The generator and the matcher were written by the same
+person from the same reading of the gateway's documentation, so a misreading shared by both is
+invisible to the harness — the engine would score well on data that is wrong in the same way it is.
+The metrics measure *whether the engine solves the problem as specified*, not whether the
+specification matches production.
+
+**Pathologies 10, 11 and 12 rest on assumptions the documentation does not confirm.** Each is
+generated under a stated guess, tracked as an open question:
+
+- **10, on-hold release** (`Q-006`) — the docs say a settlement can be held and that you contact
+  support to release it. They do not say what happens to the held balance, when it releases, or
+  whether it reappears in a later settlement. FinCtl assumes release into a later batch with a
+  `+ Σ on_hold_released` term in the identity.
+- **11, adjustment with no reference** (`Q-007`) — the docs define adjustments as "adjustments to
+  transactions, if any" and are silent on whether a reference is required. If every real adjustment
+  carries one, this pathology is fiction and `UNEXPLAINED_ADJ` measures nothing.
+- **12, FX conversion** (`Q-010`) — confirmed that international cycles differ and that minor-unit
+  scales vary. *Not* documented: where the rate lives, whether a spread is disclosed separately,
+  and which side rounds. FinCtl stores an integer `fx_rate_micros` and converts once.
+
+**The minimality prior is validated on this generator's output, not proven.** Layer 2 searches by
+iterative deepening and the smallest subset size that yields any solution wins; larger sizes are
+then not searched. The justification is that the smallest set of rows accounting for δ is the
+plausible explanation and a larger coincidental sum is not — which is how a human reconciler reads
+it, and it held on every resolvable batch in both datasets with zero false matches. It remains
+weaker than "exhaustively unique", so `larger_sizes_unsearched` is recorded in the audit detail
+whenever it was applied.
+
+**The promotion gate is only as strong as its negative examples** (`Q-015`). Mapping where its line
+falls turned up a pattern that passes and probably should not:
+
+```
+ACCEPT  IMPS/([A-Za-z0-9]{8,40})/RAZ     both-side anchored
+REJECT  IMPS/([A-Za-z0-9]{8,40})/        matches IMPS/SETTLEMENT/CR -> "SETTLEMENT"
+ACCEPT  ([A-Za-z0-9]{12,})               passes only because no negative example is that long
+REJECT  ([A-Za-z0-9]{8,})                matches SETTLEMENT
+REJECT  (\S+)                            captures too much from its own example
+```
+
+`([A-Za-z0-9]{12,})` would extract the first long alphanumeric token from *any* narration. It
+clears the gate because `NEGATIVE_EXAMPLES` is five hand-written strings and none contains a run
+that long — a real statement carrying an account number, an IFSC code with a suffix, or a packed
+timestamp would defeat it. The gate is a filter against the negative examples it was given, not
+against breadth in general, and that is a meaningfully weaker guarantee than "a bad rule cannot be
+cached".
+
+**The holdout was observed once before Phase 6, and that observation is disclosed.** The Makefile
+defect described above evaluated it at commit `a2687b1`: **auto-match 50.8%, false matches 0.00%,
+exceptions 236 of 480.** Nothing was tuned in response and nothing will be — the figure sits within
+0.1pp of dev, so it carries no signal worth acting on even if I were willing to use it. It is
+recorded here because a holdout observation that goes unmentioned is worse than one that is
+disclosed.
+
+**One narration shape was never served by a real model.** `NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT`
+needs one live call, and the free-tier allowance of 20 requests per day was exhausted before it was
+reached. It is handled by the offline stub.
+
+**The fixtures are mixed real and stub, and every run says so.** Two narration shapes were served
+live by `gemini-3.7-flash`; the rest of the fixture set is stub-generated. Runs are tagged
+`STUBBED PROPOSER` with the count, and the banner carries an adjacent note explaining that one
+cached rule was authored by a real model and therefore no longer appears in the response counts —
+its contribution moved from the response cache into the rules cache, which is what promotion is
+for. The provider was swapped from Anthropic to Google mid-project for **API access, not
+capability**; the verifier boundary is what made that a one-class change.
+
+**Not measured at all:** behaviour on real gateway data, on volumes beyond 558 records, on
+multi-day settlement cycles that straddle a month boundary, or under concurrent writes. Throughput
+is 2090 rec/s locally and 126 rec/s on the deployed free tier's shared CPU.
+
+---
 
 ## Repository map
 
-See `CLAUDE.md` for the invariants, the pinned stack, every `make` target, and the
-anti-hallucination protocol. `docs/SPEC.md` is the domain contract. `docs/DECISIONS.md`
-records why each non-obvious choice was made. `docs/WHAT_BROKE.md` is the failure log.
+```
+core/       the matcher. May not import data/ or eval/ — enforced by an import test
+data/       generator, scenario config, ground-truth labels
+audit/      hash-chained decision log
+eval/       harness, metrics, ablation, provenance
+api/        FastAPI: JSON API and the page from one process
+web/        page skeleton and stylesheet, inlined at render time
+fixtures/   llm/ = recorded responses by prompt hash; rules_cache.json = promoted regexes
+docs/       SPEC (frozen), DECISIONS, WHAT_BROKE, METRICS, OPEN_QUESTIONS, PROGRESS
+```
+
+`core/` imports neither `data/` nor `eval/`. That one-way arrow is what makes "the matcher never
+reads ground truth" mechanically checkable rather than a promise: `tests/test_invariants.py` parses
+the import graph and fails on violation. 317 tests, 1 skipped.
+
+See `docs/SPEC.md` for the frozen specification and its amendment log, `docs/DECISIONS.md` for the
+25 recorded decisions with the alternatives rejected, and `docs/METRICS.md` for every metrics block
+this project has produced, each with the command, git SHA and dataset SHA that produced it.
