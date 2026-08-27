@@ -7,6 +7,109 @@ output. A result that has not been run is `TBD`. See
 
 ---
 
+## Phase 5, re-run after the provider swap to Google Gemini (D-0025)
+
+> **The swap did not achieve its stated purpose.** It was made for API access, and there is no
+> `GEMINI_API_KEY`, `GOOGLE_API_KEY`, ADC file or `gcloud` in this environment either —
+> `genai.Client()` raises `ValueError: No API key was provided`. Fixtures therefore **could not**
+> be regenerated from real responses, the `offline_stub` tag stays because it is still true, and
+> the `!! STUBBED PROPOSER` banner stays with it. Dropping either would have been a false claim.
+
+```
+$ git rev-parse --short HEAD
+7055e7a
+$ date -u '+%Y-%m-%d %H:%M UTC'
+2026-08-27 04:45 UTC
+$ rm -rf fixtures/llm/*.json fixtures/rules_cache.json   # cold
+$ make eval
+Dataset: dev_seed_11  data 1115450f   SHA: 7055e7a   2026-08-27 04:45
+Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model
+Records processed         558          Wall clock    0.302s
+Auto-matched              425    76.2%   Throughput   1847 rec/s
+  Layer 1  exact            325    58.2%
+  Layer 2  netting           73    13.1%
+  Layer 3  fuzzy              0     0.0%
+  Layer 4  LLM+verified      27     4.8%
+False matches               0    0.00%   <- precision, not coverage
+Exceptions                133    23.8%    Rs 1,14,61,299.74 at risk
+  correctly flagged        94    70.7%
+  missed matches           39    29.3%
+  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
+  by class: absent 56, undetermined 38
+LLM calls                   8   cache hits    0   Calls / 100  1.43
+  by kind: exception_explanation 5, narration_parse 3   MODE=offline
+Rules cache                 3 rules   2 promoted from narration the seeded regex missed
+Cost / 1000            Rs TBD          USD 0.000000 total
+Audit ledger               42 entries   head 51b54deedc60
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+
+$ make llm-curve
+Curve A - the regex cache, isolated
+  fixtures cleared before every run, rules cache kept. Nothing is replayed, so a falling call count is a narration shape a promoted regex now handles.
+
+  run   calls   per 100   PARSE   explain   cache hits   promoted rules
+    1       8      1.43       3         5            0                2
+    2       6      1.08       1         5            0                2
+    3       6      1.08       1         5            0                2
+    4       6      1.08       1         5            0                2
+
+Curve B - the fixture cache
+  nothing cleared. Calls fall because responses replay by prompt hash. This would fall to zero even with no regex ever promoted, which is why A is reported too.
+```
+
+### The question asked, answered honestly
+
+**"Did the model's proposed regexes pass the negative-example gate?"** — **Unanswerable. No model
+was reached.** What can be reported is narrower and should not be read as a substitute:
+
+| | |
+|---|---|
+| Narrations examined | 4 |
+| Resolved by the seeded rule | 1 |
+| Resolved by promotion | 2 |
+| Unparseable (no reference in the text) | 1 |
+| Promotions **accepted** | 2 |
+| Promotions **rejected by the gate** | **0** |
+
+**0 rejections is not encouraging news, and here is why.** The stub proposes regexes anchored on
+the literal text on *both* sides of the reference — it happens to emit
+`IMPS/([A-Za-z0-9]{8,40})/RAZ`. Patterns that tight clear the gate trivially. So the rejection
+rate measures the stub's conservatism, not the gate's leniency or a model's accuracy.
+
+Mapping where the line actually falls was more informative than the count:
+
+```
+ACCEPT  IMPS/([A-Za-z0-9]{8,40})/RAZ     both-side anchored
+REJECT  IMPS/([A-Za-z0-9]{8,40})/        matches IMPS/SETTLEMENT/CR -> "SETTLEMENT"
+ACCEPT  ([A-Za-z0-9]{12,})               passes only because no negative example is that long
+REJECT  ([A-Za-z0-9]{8,})                matches SETTLEMENT
+REJECT  (\S+)                            captures too much from its own example
+```
+
+The second row is the finding. **A one-sided anchor is the obvious thing to propose** for that
+narration, and the gate rejects it. That row was written expecting `True`, the test failed, and
+the expectation was wrong — so a real model producing the natural answer would be rejected, and
+the observed 0-rejection rate would not survive contact with one.
+
+The third row is a limitation, logged as **Q-015**: `([A-Za-z0-9]{12,})` passes only because the
+five hand-written negative examples happen not to contain a 12-character run. The gate filters
+against the negatives it was given, not against breadth in general.
+
+### What the swap cost, and what it demonstrated
+
+**One class.** `GeminiProposer` replaced `AnthropicProposer` behind the unchanged `Proposer`
+interface. `core/verifier.py`, `core/rules_cache.py` and the fixture cache were not touched, and
+their test suites were not edited — which is the first real test of the claim in D-0022 that the
+verifier boundary makes the model a substitutable component. It held.
+
+Every fixture was correctly invalidated by the swap, because the prompt key covers the model
+string: `claude-opus-5` and `gemini-3.7-flash` hash differently, so no answer from one model can
+be replayed as if it came from the other.
+
+---
+
 ## Phase 5 — Layer 4 (adjudication behind the verifier)
 
 > **Every LLM figure below came from a stub, not a model.** There is no `ANTHROPIC_API_KEY` and
@@ -472,7 +575,7 @@ It is not comparable to them, however similar the numbers look.
 | 2 — exact only (L1) | `dev_seed_11` | `d93197db` | 50.3% | 0.00% | 239 | `6244f91` | 2026-08-26 |
 | 3 — + netting (L2) | `dev_seed_11` | `d93197db` | 66.3% | 0.00% | 162 | `6244f91` | 2026-08-26 |
 | 4 — + fuzzy (L3) | `dev_seed_11` | `d93197db` | 66.3% | 0.00% | 162 | `1e9e225` | 2026-08-26 |
-| 5 — + LLM (L4) | `dev_seed_11` | `1115450f` | 76.2% | 0.00% | 133 | `5069d36` | 2026-08-26 |
+| 5 — + LLM (L4) | `dev_seed_11` | `1115450f` | 76.2% | 0.00% | 133 | `7055e7a` | 2026-08-27 |
 | 6 (final, once) | `holdout_seed_97` | TBD | TBD | TBD | TBD | TBD | TBD |
 
 Both current rows are **real runs on the same data**, produced by the ablation arms rather than

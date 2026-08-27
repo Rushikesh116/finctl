@@ -105,7 +105,7 @@ Do not add a dependency beyond this list without asking first.
 | Assignment problem | `numpy` + `scipy.optimize.linear_sum_assignment` | 2.5.2 / 1.18.1 | Globally optimal matching, not greedy |
 | Storage | stdlib `sqlite3`, plain SQL | — | Zero infra, file is committable, a judge can inspect it |
 | API | `fastapi` + `uvicorn` | 0.141.1 / 0.52.4 | |
-| LLM | `anthropic` SDK | 1.0.0 | |
+| LLM | `google-genai` SDK | 2.20.0 | Provider swapped from Anthropic for API access, not capability (D-0025). The verifier boundary made it a one-class change |
 | Tests | `pytest` | 9.1.1 | |
 | Frontend | Vanilla HTML + CSS + JS, **no build step** | — | One container, no npm, no bundler, trivial deploy |
 
@@ -113,7 +113,9 @@ Versions were read from `pip show` after installing into `.venv`, never from mem
 `requirements.txt` holds the direct pins; `requirements.lock.txt` holds the full
 transitive closure.
 
-**Default model: `claude-opus-5`.** `temperature` is *not* available on it — see D-0004.
+**Provider: Google Gemini, model `gemini-3.7-flash`** (D-0025). `temperature` is not set: determinism comes from the fixture cache, which was always the real mechanism (D-0004).
+
+**No call has ever reached a model API** — no credential exists for either provider. Every LLM figure in this repo came from `OfflineProposer` and is tagged `offline_stub`.
 
 ---
 

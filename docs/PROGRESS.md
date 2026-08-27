@@ -285,9 +285,12 @@ the network.
 logged in `docs/OPEN_QUESTIONS.md` under "Out of scope" rather than built — including
 LLM disambiguation of `AMBIGUOUS` refusals, which would actively make the system worse.
 
-**The honesty caveat that matters:** no call has ever reached the API. No credential exists in
-this environment, so every LLM figure came from `OfflineProposer`, fixtures are tagged
-`offline_stub`, and the metrics block says so on the same line as the numbers.
+**The honesty caveat that matters:** no call has ever reached a model API. Provider was swapped
+Anthropic → Google Gemini for API access (D-0025) and **there is no Gemini credential either**, so
+the swap did not achieve its purpose here. Every LLM figure came from `OfflineProposer`, fixtures
+stay tagged `offline_stub`, and the block prints `!! STUBBED PROPOSER` on the same line as the
+numbers. The swap did demonstrate one thing for real: it was a **one-class change**, because the
+verifier boundary makes the model substitutable by construction (D-0022).
 
 Layer 4 sees only what survived Layers 1–3 — target **under 5%** of the batch.
 

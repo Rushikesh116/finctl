@@ -610,3 +610,67 @@ then be approved whose money does not balance, which is the one thing Layers 1 a
 impossible. If a tolerance is ever introduced, the false-match rate must be re-reported on both
 settings and the verifier's guarantee restated, because it would no longer be "the money
 balances". *2026-08-26*
+
+---
+
+## D-0025 — LLM provider swapped from Anthropic to Google Gemini
+
+**Deviates from the pinned stack** (`CLAUDE.md` → "Stop and ask before" lists adding or changing
+a dependency). Requested explicitly; recorded here before the adapter was written.
+
+**Reason: API access, not capability.** Nothing about the Anthropic path was found wanting — it
+was written, unit-tested, and correct against the installed SDK. It was never *executed*, because
+no credential existed. The swap is an attempt to reach a reachable API, and it is worth being
+precise that this is a procurement decision, not a model-quality one. No claim is made here that
+Gemini is better or worse for this task; the task is JSON extraction from a short string, which
+any current frontier model handles.
+
+**Why the swap is cheap: the verifier boundary was built for exactly this.** Invariant 3 says the
+LLM proposes and a deterministic verifier disposes, and D-0022 moved the verifier in at Phase 3
+so that Layers 1–3 already route through it. The consequence is that **the model is a
+substitutable component by construction**, not by refactoring:
+
+* it cannot approve a match — `core/verifier.py` recomputes the arithmetic;
+* it cannot cache a bad rule — `core/rules_cache.py` validates against positive *and* negative
+  examples;
+* it cannot make a run unreplayable — the fixture cache is keyed by prompt hash.
+
+So swapping providers touches one class. That property is the point of the boundary, and this is
+the first time it has been tested rather than asserted.
+
+**Scope, deliberately narrow.** One adapter replaces another: `GeminiProposer` in place of
+`AnthropicProposer`, behind the existing `Proposer` interface. **No multi-provider abstraction**
+— no registry, no strategy pattern, no provider-agnostic config layer. A second provider is not a
+requirement, and generalising for one that does not exist would cost Phase 6 and 7 time, which
+is where a judge actually looks. If a third provider is ever needed, that is when the
+abstraction earns itself.
+
+**Unchanged, by constraint:** `core/verifier.py`, the promotion gate in `core/rules_cache.py`, and
+the fixture cache. Verified by test rather than intent — the promotion and verifier test suites
+are provider-agnostic and were not edited.
+
+**Technical facts, from the installed SDK and fetched docs rather than memory:**
+
+| | |
+|---|---|
+| Package | `google-genai` 2.20.0 |
+| Client | `genai.Client()` — reads `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
+| Call | `client.models.generate_content(model=, contents=, config=)` |
+| Structured output | `types.GenerateContentConfig(response_mime_type="application/json", response_schema=<PydanticModel>)` — the annotation accepts a `type`, so the existing Pydantic models are passed directly |
+| Parsed result | `response.parsed` |
+| Provenance | `response.model_version` — the version that actually served the request, which is better provenance than the string requested |
+| Tokens | `response.usage_metadata.prompt_token_count` / `.candidates_token_count` |
+| Model | `gemini-3.7-flash` — the documented current default, and a Flash tier is the right shape for JSON extraction from a short string |
+
+Note the doc page for structured output describes a *different* surface
+(`client.interactions.create`, `response_format`, `output_text`) which also exists in 2.20.0. The
+code is written against `client.models.generate_content` because that is the path whose parameter
+names were verified directly against the installed package.
+
+**The uncomfortable part, stated rather than discovered later.** There is no `GEMINI_API_KEY`,
+no `GOOGLE_API_KEY`, no ADC file and no `gcloud` in this environment either. **The swap therefore
+does not achieve its stated purpose here.** The adapter is written and tested against the real
+SDK surface, so it will work the moment a key exists — but fixtures still cannot be regenerated
+from real responses, the `offline_stub` tag stays because it is still true, and the question "do
+the model's proposed regexes pass the negative-example gate" remains **unanswered rather than
+answered**. *2026-08-26*

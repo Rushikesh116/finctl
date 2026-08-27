@@ -40,6 +40,10 @@ class LedgerEntry:
     outcome: str
     confidence: int
     detail: str = ""
+    # Provider AND the served model version. The model string alone is not provenance: an alias
+    # can be routed to a new build between runs, so the version the provider *reported* is what
+    # gets hashed into the chain.
+    provider: str | None = None
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
@@ -94,6 +98,7 @@ class AuditLedger:
         outcome: str,
         confidence: int,
         detail: str = "",
+        provider: str | None = None,
         model: str | None = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
@@ -106,6 +111,12 @@ class AuditLedger:
                 "token counts or cost recorded without a model: an LLM decision must name "
                 "the model version it came from, or the cost accounting is unattributable"
             )
+        if model is not None and provider is None:
+            raise ValueError(
+                "a model was recorded without a provider. Two providers can ship "
+                "similarly-named models, so the model string alone does not identify what "
+                "produced a decision."
+            )
 
         entry = LedgerEntry(
             seq=len(self._entries) + 1,
@@ -117,6 +128,7 @@ class AuditLedger:
             outcome=outcome,
             confidence=confidence,
             detail=detail,
+            provider=provider,
             model=model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
@@ -161,6 +173,7 @@ class AuditLedger:
                     outcome         TEXT    NOT NULL,
                     confidence      INTEGER NOT NULL,
                     detail          TEXT    NOT NULL,
+                    provider        TEXT,
                     model           TEXT,
                     input_tokens    INTEGER NOT NULL,
                     output_tokens   INTEGER NOT NULL,
@@ -171,7 +184,7 @@ class AuditLedger:
                 """
             )
             connection.executemany(
-                "INSERT INTO audit_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO audit_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
                     (
                         e.seq,
@@ -181,6 +194,7 @@ class AuditLedger:
                         e.outcome,
                         e.confidence,
                         e.detail,
+                        e.provider,
                         e.model,
                         e.input_tokens,
                         e.output_tokens,

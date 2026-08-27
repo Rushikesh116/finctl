@@ -242,6 +242,37 @@ literal text, and the Dockerfile in Phase 6 will carry a comment saying so.
 
 ---
 
+## Q-015 — the promotion gate is only as strong as its negative examples
+
+Mapping where the gate's line falls (`tests/test_adjudicate.py`) turned up a pattern that
+**passes and probably should not**:
+
+```
+ACCEPT  IMPS/([A-Za-z0-9]{8,40})/RAZ     both-side anchored
+REJECT  IMPS/([A-Za-z0-9]{8,40})/        matches IMPS/SETTLEMENT/CR -> "SETTLEMENT"
+ACCEPT  ([A-Za-z0-9]{12,})               <- passes only because no negative example
+                                            happens to contain a 12+ character run
+REJECT  ([A-Za-z0-9]{8,})                matches SETTLEMENT
+REJECT  (\S+)                            captures too much from its own example
+```
+
+`([A-Za-z0-9]{12,})` would extract the first long alphanumeric token from *any* narration. It
+clears the gate because `NEGATIVE_EXAMPLES` is five hand-written strings and none of them
+contains a run that long. A real statement carrying an account number, an IFSC code with a
+suffix, or a packed timestamp would defeat it — and once promoted it is cached and reused.
+
+**The gate is a filter against the negative examples it was given, not against breadth in
+general.** That is a meaningfully weaker guarantee than "a bad rule cannot be cached", and the
+docstring should not be read as claiming the stronger one.
+
+**What would resolve it:** negative examples drawn from the dataset rather than hand-written —
+every narration in the bank statement that ground truth says carries no reference — plus a
+breadth check that rejects a pattern matching more than a small fraction of all narrations in
+the run. Not built: Phase 5's scope was fixed at three items and this is a fourth. Logged here
+per that instruction.
+
+---
+
 # Out of scope — logged, not built
 
 Phase 5's scope was fixed at three items: narration parsing with the regex-promotion cache, the

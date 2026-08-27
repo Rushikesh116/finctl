@@ -1,5 +1,7 @@
 {
-  "model": "claude-opus-5",
+  "model": "gemini-3.7-flash",
+  "model_version": "gemini-3.7-flash",
+  "provider": "offline_stub",
   "response": {
     "confidence": 90,
     "reasoning": "no token in this narration looks like a settlement reference",

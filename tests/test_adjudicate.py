@@ -226,3 +226,120 @@ def test_promoted_rules_survive_across_runs() -> None:
     second = harness.evaluate(DEV, max_layer=4)
     assert second.rules_promoted >= first.rules_promoted
     assert second.rules_total >= len(SEEDED_RULES)
+
+
+# --- the provider adapter ----------------------------------------------------------------------
+
+
+def test_the_provider_is_gemini_and_anthropic_is_gone() -> None:
+    """D-0025. One adapter replaced another; no multi-provider abstraction was introduced."""
+    assert llm.PROVIDER == "google-gemini"
+    assert llm.DEFAULT_MODEL.startswith("gemini-")
+    assert hasattr(llm, "GeminiProposer")
+    assert not hasattr(llm, "AnthropicProposer")
+
+
+def test_the_live_path_is_selected_only_by_a_google_key(monkeypatch) -> None:
+    monkeypatch.delenv("DEMO_MODE", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    assert llm.build_proposer().mode == "offline"
+
+    monkeypatch.setenv("DEMO_MODE", "1")
+    assert llm.build_proposer().mode == "replay"
+
+
+def test_changing_the_model_invalidates_every_fixture() -> None:
+    """The prompt key covers the model, so a provider swap cannot silently replay another
+    model's answers as if they were this one's."""
+    args = {"schema": "narration_parse", "system": "s", "user": "u"}
+    assert llm.prompt_key(model="claude-opus-5", **args) != llm.prompt_key(
+        model="gemini-3.7-flash", **args
+    )
+
+
+def test_provider_and_model_version_reach_the_ledger() -> None:
+    """"Which model produced this" is provenance, so it is hashed into the chain."""
+    from audit.ledger import AuditLedger
+
+    ledger = AuditLedger()
+    entry = ledger.record(
+        layer=4,
+        decision="raise_exception",
+        record_ids=["a"],
+        outcome="UNPARSEABLE_NARRATION",
+        confidence=100,
+        provider="google-gemini",
+        model="gemini-3.7-flash",
+    )
+    assert entry.provider == "google-gemini"
+    assert "google-gemini" in entry.payload()["provider"]
+
+
+def test_a_model_without_a_provider_is_refused() -> None:
+    """Two providers can ship similarly-named models, so the model string alone is not enough."""
+    from audit.ledger import AuditLedger
+
+    with pytest.raises(ValueError, match="without a provider"):
+        AuditLedger().record(
+            layer=4,
+            decision="d",
+            record_ids=["a"],
+            outcome="o",
+            confidence=50,
+            model="gemini-3.7-flash",
+        )
+
+
+# --- what the negative-example gate would do to a real model's proposals -----------------------
+#
+# The stub proposes regexes anchored on the literal text either side of the reference, and those
+# pass the gate trivially: a literal anchor like `IMPS/` cannot match a reference-free narration.
+# So the observed 0% rejection rate says almost nothing about the gate, because the gate exists
+# for LOOSER proposals than the stub is capable of making.
+#
+# These are patterns a model plausibly returns for the same narrations. They are the closest
+# thing available to an answer, and they are not a substitute for one.
+
+IMPS_EXAMPLE = "IMPS/1888481283mjoasu/RAZORPAY SOFTWARE"
+
+REALISTIC_PROPOSALS = [
+    # Tightly anchored on BOTH sides - what the stub happens to produce, and what passes.
+    (r"IMPS/([A-Za-z0-9]{8,40})/RAZ", IMPS_EXAMPLE, "1888481283mjoasu", True),
+    (r"REF ([A-Za-z0-9]{8,40}) RAZ", "RTGS CR REF 1552002271luumnm RAZORPAY", "1552002271luumnm", True),
+    # Anchored on one side only. This is the natural, obvious proposal for this narration -- and
+    # the gate REJECTS it, because `IMPS/SETTLEMENT/CR` also matches and yields "SETTLEMENT".
+    # Discovered by this test failing against an expectation of True.
+    (r"IMPS/([A-Za-z0-9]{8,40})/", IMPS_EXAMPLE, "1888481283mjoasu", False),
+    # "Just grab a long token" answers.
+    (r"([A-Za-z0-9]{12,})", IMPS_EXAMPLE, "1888481283mjoasu", True),
+    (r"([A-Za-z0-9]{8,})", IMPS_EXAMPLE, "1888481283mjoasu", False),
+    # Catastrophic - matches anything.
+    (r"(\S+)", "1888481283mjoasu", "1888481283mjoasu", False),
+    (r"(.+)", "1888481283mjoasu", "1888481283mjoasu", False),
+]
+
+
+@pytest.mark.parametrize(("pattern", "example", "expected", "should_pass"), REALISTIC_PROPOSALS)
+def test_the_gate_on_patterns_a_model_might_plausibly_propose(
+    pattern: str, example: str, expected: str, should_pass: bool
+) -> None:
+    """Documents where the gate's line actually falls, since no model has been asked.
+
+    The informative row is `IMPS/([A-Za-z0-9]{8,40})/` -- anchored on the left, which is the
+    obvious thing to propose for this narration. The gate rejects it, because
+    `IMPS/SETTLEMENT/CR` matches too and yields "SETTLEMENT". This row was written expecting
+    True and the test failed; the expectation was wrong and the gate was right.
+
+    That matters for reading the promotion numbers. The stub survives the gate only because it
+    anchors on BOTH sides -- it happens to append the `RAZ` suffix. A model proposing the more
+    natural one-sided anchor would be rejected, so the observed 0-rejections figure is a
+    property of the stub's conservatism, not evidence that proposals generally pass.
+    """
+    cache = RulesCache()
+    if should_pass:
+        cache.promote(pattern, example=example, expected=expected, name="candidate")
+        assert len(cache.promoted) == 1
+    else:
+        with pytest.raises(PromotionRejected):
+            cache.promote(pattern, example=example, expected=expected, name="candidate")

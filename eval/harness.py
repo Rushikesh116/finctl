@@ -94,6 +94,8 @@ class Metrics:
     llm_cache_hits: int = 0
     llm_calls_by_kind: dict[str, int] = field(default_factory=dict)
     llm_mode: str = "-"
+    llm_provider: str = "-"
+    llm_model_versions: tuple[str, ...] = ()
     llm_stubbed: bool = False
     cost_micros_usd: int = 0
     rules_total: int = 0
@@ -355,6 +357,8 @@ def evaluate(
         metrics.llm_cache_hits = proposer.stats.cache_hits
         metrics.llm_calls_by_kind = dict(proposer.stats.calls_by_schema)
         metrics.llm_mode = proposer.mode
+        metrics.llm_provider = proposer.stats.provider
+        metrics.llm_model_versions = tuple(sorted(proposer.stats.model_versions))
         metrics.llm_stubbed = proposer.stats.is_stubbed
         metrics.cost_micros_usd = proposer.stats.cost_micros_usd
     if report is not None:
@@ -365,15 +369,41 @@ def evaluate(
         metrics.rules_total = len(rules_now)
         metrics.rules_promoted = len(rules_now.promoted)
 
-    ledger = _write_ledger(result, db_path)
+    ledger = _write_ledger(
+        result,
+        db_path,
+        provider=proposer.stats.provider if proposer is not None else None,
+        model_version=(
+            sorted(proposer.stats.model_versions)[0]
+            if proposer is not None and proposer.stats.model_versions
+            else None
+        ),
+    )
     metrics.ledger_entries = len(ledger)
     metrics.ledger_head = ledger.head_hash
 
     return metrics
 
 
-def _write_ledger(result: identity.LayerResult, db_path: Path | None) -> AuditLedger:
+def _write_ledger(
+    result: identity.LayerResult,
+    db_path: Path | None,
+    *,
+    provider: str | None = None,
+    model_version: str | None = None,
+) -> AuditLedger:
+    """Provider and served model version ride along on Layer 4 entries only.
+
+    Layers 1-3 are deterministic code, so attaching a model to them would claim a dependency
+    they do not have. Layer 4's decisions do depend on what produced them, so those entries
+    carry it into the hash chain.
+    """
     ledger = AuditLedger()
+
+    def _provenance(layer: int) -> dict[str, str | None]:
+        if layer != adjudicate.LAYER or provider is None:
+            return {}
+        return {"provider": provider, "model": model_version}
 
     for group in sorted(result.groups, key=lambda g: g.group_id):
         ledger.record(
@@ -386,6 +416,7 @@ def _write_ledger(result: identity.LayerResult, db_path: Path | None) -> AuditLe
                 f"identity balanced at zero tolerance: expected "
                 f"{group.expected_credit_paise} == actual {group.actual_credit_paise}"
             ),
+            **_provenance(group.layer),
         )
     for candidate in sorted(result.candidates, key=lambda c: c.settlement_id):
         ledger.record(
@@ -416,6 +447,7 @@ def _write_ledger(result: identity.LayerResult, db_path: Path | None) -> AuditLe
             outcome=exception.exception_type,
             confidence=100,
             detail=detail,
+            **_provenance(exception.layer),
         )
 
     verify_chain(ledger.entries)
@@ -604,6 +636,13 @@ def render(metrics: Metrics) -> str:
 
     lines = [
         f"{p.header_fragment()}   SHA: {p.git_sha}   {p.started_at_utc}",
+        f"Adjudicator: {metrics.llm_provider} / "
+        f"{','.join(metrics.llm_model_versions) or '-'}"
+        + (
+            "   !! STUBBED PROPOSER, not a model"
+            if metrics.llm_stubbed
+            else ""
+        ),
         f"Records processed  {metrics.n:>10}          "
         f"Wall clock  {seconds:>7.3f}s",
         f"Auto-matched       {metrics.auto_matched:>10}   "
@@ -641,10 +680,7 @@ def render(metrics: Metrics) -> str:
             ", ".join(f"{k} {v}" for k, v in sorted(metrics.llm_calls_by_kind.items()))
             or "none (all replayed from fixtures)"
         )
-        + (
-            f"   MODE={metrics.llm_mode}"
-            + ("  !! STUBBED PROPOSER, not a model" if metrics.llm_stubbed else "")
-        ),
+        + f"   MODE={metrics.llm_mode}",
         f"Rules cache        {metrics.rules_total:>10} rules   {metrics.rules_promoted} promoted "
         f"from narration the seeded regex missed",
         f"Cost / 1000        {'Rs TBD':>10}          "
