@@ -1,0 +1,363 @@
+/* FinCtl UI. Inlined into the page by scripts/render_report.py -- kept as a real file so it is
+   editable and reviewable, but never fetched at runtime. No framework, no build step.
+
+   Palette: grayscale, plus exactly two accents. One for money that reconciled, one for money that
+   did not. A third colour would imply a third outcome, and there are only two. */
+
+:root {
+  --ink: #16181d;
+  --ink-2: #40454e;
+  --muted: #6b7280;
+  --rule: #e3e6ea;
+  --rule-2: #f0f2f4;
+  --bg: #ffffff;
+  --bg-2: #fafbfc;
+
+  --resolved: #1f6f4a;
+  --exception: #a5401a;
+
+  --focus: #16181d;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #e8eaed;
+    --ink-2: #b8bdc5;
+    --muted: #9aa0a6;
+    --rule: #2c3037;
+    --rule-2: #21242a;
+    --bg: #14161a;
+    --bg-2: #191c21;
+
+    --resolved: #52b184;
+    --exception: #dd8055;
+
+    --focus: #e8eaed;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 2.5rem 1.25rem 5rem;
+  background: var(--bg);
+  color: var(--ink);
+  /* Monospace with tabular numerals everywhere: every number on this page is meant to be
+     compared against the number above it, and proportional digits break vertical alignment. */
+  font: 400 15px/1.55 var(--mono);
+  font-variant-numeric: tabular-nums;
+  -moz-font-feature-settings: "tnum";
+  font-feature-settings: "tnum";
+}
+
+main { max-width: 64rem; margin: 0 auto; }
+
+/* --- header ------------------------------------------------------------------------------ */
+
+h1 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 .3rem;
+}
+
+.tagline { color: var(--ink-2); margin: 0 0 .9rem; font-size: .85rem; max-width: 46rem; }
+
+.provenance {
+  color: var(--muted);
+  font-size: .74rem;
+  margin: 0 0 2.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem 1rem;
+}
+.provenance b { font-weight: 500; color: var(--ink-2); }
+
+.warn {
+  color: var(--exception);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: .5rem .7rem;
+  font-size: .76rem;
+  margin: 0 0 1.75rem;
+}
+
+h2 {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 3rem 0 .9rem;
+  padding-bottom: .4rem;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+h2 .aside { font-weight: 400; font-size: .72rem; }
+
+.note { color: var(--muted); font-size: .76rem; margin: .8rem 0 0; max-width: 52rem; }
+
+/* --- metrics strip ----------------------------------------------------------------------- */
+
+.strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cell { background: var(--bg); padding: .85rem .9rem; }
+.cell dt { color: var(--muted); font-size: .7rem; margin: 0 0 .35rem; font-weight: 400; }
+.cell dd {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.cell .sub { display: block; font-size: .7rem; color: var(--muted); margin-top: .3rem; font-weight: 400; }
+.cell.good dd { color: var(--resolved); }
+.cell.bad dd { color: var(--exception); }
+
+/* --- cascade ----------------------------------------------------------------------------- */
+
+.cascade { display: flex; flex-direction: column; gap: .5rem; }
+
+.rung { display: grid; grid-template-columns: 11.5rem 1fr; gap: .75rem; align-items: center; }
+.rung .lbl { font-size: .8rem; }
+.rung .lbl small { display: block; color: var(--muted); font-size: .68rem; }
+
+.track {
+  position: relative;
+  background: var(--rule-2);
+  border-radius: 1px;
+  height: 1.6rem;
+  display: flex;
+  align-items: center;
+}
+
+/* Width is set inline from the data, because the value IS the datum -- a stylesheet cannot know
+   it. Nothing else about the bar is inline. */
+.fill { height: 100%; background: var(--resolved); border-radius: 1px; min-width: 2px; }
+.rung.dead .fill { background: var(--muted); }
+.rung.out .fill { background: var(--exception); }
+
+.rung .qty {
+  position: absolute;
+  left: .55rem;
+  font-size: .74rem;
+  color: var(--ink);
+  /* The label sits on top of the fill, which can be either accent or the track behind it.
+     A shadow in the page background colour keeps it legible over all three without a second
+     colour or an opacity trick. */
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 2px var(--bg);
+}
+.rung .qty .of { color: var(--muted); }
+
+/* --- exception table --------------------------------------------------------------------- */
+
+.by-type {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+  margin-bottom: 2rem;
+}
+.by-type th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: .7rem;
+  padding: 0 .5rem .35rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+.by-type td { padding: .35rem .5rem .35rem 0; border-bottom: 1px solid var(--rule-2); }
+.by-type tr:last-child td { border-bottom: none; }
+
+/* Money and counts right-aligned, always. A column of amounts is read by scanning the ones
+   digit, and centring or left-aligning them makes that impossible. */
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.num { padding-right: 0; }
+
+.queue { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 2px; }
+
+/* <details>/<summary> rather than a scripted table: keyboard operation, Enter/Space, and screen
+   reader expanded-state come from the element for free, and no JS means no way for the toggle to
+   break. The grid gives the alignment a table would. */
+.item { background: var(--bg); }
+.item > summary {
+  display: grid;
+  grid-template-columns: 1.1rem 1fr 6.5rem 10rem;
+  gap: .6rem;
+  align-items: baseline;
+  padding: .6rem .8rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: .8rem;
+}
+.item > summary::-webkit-details-marker { display: none; }
+.item > summary:hover { background: var(--bg-2); }
+
+/* Text marker, not an icon pack. */
+.item > summary .mark { color: var(--muted); font-size: .8rem; user-select: none; }
+.item > summary .mark::before { content: "+"; }
+.item[open] > summary .mark::before { content: "\2212"; }
+
+.item > summary .what { color: var(--ink); }
+.item > summary .where { display: block; color: var(--muted); font-size: .68rem; margin-top: .2rem; }
+.item > summary .cnt { color: var(--muted); font-size: .74rem; }
+.item > summary .amt { color: var(--exception); }
+
+.body { padding: .2rem .8rem 1.1rem 2.5rem; border-top: 1px solid var(--rule-2); }
+.body > p { margin: .8rem 0 0; font-size: .78rem; color: var(--ink-2); max-width: 52rem; }
+
+.body h3 {
+  font-size: .68rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 1.4rem 0 .5rem;
+}
+.body h3 .flag { font-weight: 400; color: var(--exception); }
+.body h3 .ok { font-weight: 400; color: var(--muted); }
+
+.ev { width: 100%; border-collapse: collapse; font-size: .74rem; }
+.ev th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: .67rem;
+  padding: 0 .6rem .3rem 0;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.ev td {
+  padding: .3rem .6rem .3rem 0;
+  border-bottom: 1px solid var(--rule-2);
+  vertical-align: top;
+}
+.ev tr:last-child td { border-bottom: none; }
+.ev .rid { color: var(--ink-2); white-space: nowrap; }
+.ev .keys { color: var(--muted); font-size: .69rem; }
+.ev .keys span { margin-right: .7rem; white-space: nowrap; }
+.ev .pair td { border-bottom: none; padding-bottom: 0; }
+.ev .pairsum { color: var(--resolved); }
+
+.subset { margin: 0 0 .5rem; }
+.subset .ids { color: var(--ink-2); }
+.subset .eq { color: var(--muted); }
+
+.trail { width: 100%; border-collapse: collapse; font-size: .72rem; }
+.trail th {
+  text-align: left; font-weight: 500; color: var(--muted); font-size: .67rem;
+  padding: 0 .6rem .3rem 0; border-bottom: 1px solid var(--rule);
+}
+.trail td { padding: .3rem .6rem; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+.trail td:first-child { padding-left: 0; }
+.trail tr:last-child td { border-bottom: none; }
+.trail .hash { color: var(--muted); white-space: nowrap; }
+.trail .det { color: var(--ink-2); }
+
+.empty {
+  padding: 1.5rem .9rem;
+  color: var(--muted);
+  font-size: .78rem;
+  text-align: center;
+  background: var(--bg);
+}
+.empty code {
+  color: var(--ink);
+  background: var(--rule-2);
+  padding: .1rem .35rem;
+  border-radius: 2px;
+}
+
+/* --- raw blocks -------------------------------------------------------------------------- */
+
+pre {
+  background: var(--bg-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: .9rem 1rem;
+  overflow-x: auto;
+  font-size: .72rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+details.raw > summary {
+  cursor: pointer;
+  font-size: .76rem;
+  color: var(--muted);
+  padding: .4rem 0;
+  list-style: none;
+}
+details.raw > summary::-webkit-details-marker { display: none; }
+details.raw > summary::before { content: "+ "; }
+details.raw[open] > summary::before { content: "\2212 "; }
+details.raw > summary:hover { color: var(--ink); }
+
+footer {
+  margin-top: 3.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: .72rem;
+}
+footer a { color: inherit; }
+
+/* --- focus, motion, small screens -------------------------------------------------------- */
+
+/* Visible focus on everything interactive, including summary elements, which several UA
+   stylesheets leave unstyled. */
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+summary:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (max-width: 46rem) {
+  body { padding: 1.75rem .9rem 4rem; font-size: 14px; }
+
+  /* The cascade stacks: a 11.5rem label column plus a bar does not fit a phone, and shrinking
+     the label to fit would truncate the layer names, which are the point. */
+  .rung { grid-template-columns: 1fr; gap: .3rem; }
+  .rung .lbl small { display: inline; margin-left: .4rem; }
+
+  /* Amount stays on its own row and stays right-aligned rather than being dropped -- it is the
+     column an operator triages on. */
+  .item > summary {
+    grid-template-columns: 1.1rem 1fr;
+    row-gap: .35rem;
+  }
+  .item > summary .cnt,
+  .item > summary .amt { grid-column: 2; text-align: left; }
+  .item > summary .amt { font-size: .85rem; }
+
+  .body { padding-left: 1rem; }
+
+  /* Evidence tables scroll rather than reflow: the row-id and amount columns must stay on one
+     line to remain comparable. */
+  .ev-wrap, .trail-wrap { overflow-x: auto; }
+
+  .cell dd { font-size: 1.2rem; }
+}

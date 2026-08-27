@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from audit.ledger import AuditLedger, verify_chain
+from audit.ledger import AuditLedger, LedgerEntry, verify_chain
 from core import adjudicate, assignment, identity, llm, results, settlement
 from core.config import load_dotenv
 from core.rules_cache import RulesCache
@@ -113,9 +113,28 @@ class Metrics:
     refusals: dict[str, tuple[int, int]] = field(default_factory=dict)
     ledger_entries: int = 0
     ledger_head: str = ""
+    # The objects themselves, not just counts. The UI has to show an operator *why* a record was
+    # declined, and a refusal's evidence is only auditable if it travels with the refusal.
+    exceptions: list[results.ReconException] = field(default_factory=list)
+    ledger: list[LedgerEntry] = field(default_factory=list)
+    record_digest: dict[str, dict[str, object]] = field(default_factory=dict)
 
     def pct(self, numerator: int, denominator: int) -> str:
         return f"{100 * numerator / denominator:.1f}%" if denominator else "n/a"
+
+    def entering_layer(self) -> dict[int, int]:
+        """Records *arriving* at each layer, plus what fell through all of them.
+
+        Distinct from `per_layer`, which is how many each layer *resolved*. Entering counts are
+        what make the cascade a funnel: a layer that resolves nothing is visible as a bar the
+        same width as the one before it, which is exactly the diagnostic worth surfacing.
+        """
+        entering: dict[int, int] = {}
+        remaining = self.n
+        for layer in sorted(BUILT_LAYERS):
+            entering[layer] = remaining
+            remaining -= self.per_layer.get(layer, 0)
+        return entering
 
 
 def _calls_per_100(metrics: Metrics) -> str:
@@ -483,8 +502,82 @@ def evaluate(
     )
     metrics.ledger_entries = len(ledger)
     metrics.ledger_head = ledger.head_hash
+    metrics.ledger = ledger.entries
+    metrics.exceptions = list(result.exceptions)
+    metrics.record_digest = _record_digest(data, list(result.exceptions))
 
     return metrics
+
+
+def _record_digest(
+    data: NormalizedDataset, exceptions: list[results.ReconException]
+) -> dict[str, dict[str, object]]:
+    """Readable copies of every record an exception names, including inside its evidence.
+
+    The point of recording evidence is that a refusal can be checked without joining back to the
+    source files. A list of row ids does not achieve that — `mer_0207` beside `gw_0311` tells a
+    reader nothing about whether the pairing is genuinely ambiguous. So each referenced row
+    travels with its amount, its timestamp, and the keys that would have distinguished it.
+
+    Referenced rows only. Inlining all of them would pay in page weight for rows nobody opens.
+    """
+    wanted: set[str] = set()
+    for exception in exceptions:
+        wanted.update(exception.record_ids)
+        for item in exception.evidence:
+            wanted.update(item.row_ids)
+
+    digest: dict[str, dict[str, object]] = {}
+
+    for merchant in data.merchant_rows:
+        if merchant.row_id in wanted:
+            digest[merchant.row_id] = {
+                "source": "ledger",
+                "kind": merchant.kind,
+                "amount_paise": merchant.amount_paise,
+                "currency": merchant.currency,
+                "at_utc": merchant.issued_at_utc,
+                "keys": {
+                    "order_ref": merchant.order_ref,
+                    "gateway_order_id": merchant.gateway_order_id,
+                    "customer_ref": merchant.customer_ref,
+                },
+            }
+
+    for gateway in data.gateway_rows:
+        if gateway.row_id in wanted:
+            digest[gateway.row_id] = {
+                "source": "gateway",
+                "kind": gateway.type,
+                # Direction is carried by which column is populated (D-0008), so both the gross
+                # figure and the net contribution are kept — the net is what the batch identity
+                # is computed from, and a reader checking the arithmetic needs it.
+                "amount_paise": gateway.credit_paise or gateway.debit_paise,
+                "net_paise": gateway.net_paise,
+                "currency": gateway.currency,
+                "at_utc": gateway.created_at_utc,
+                "keys": {
+                    "payment_id": gateway.payment_id,
+                    "order_id": gateway.order_id,
+                    "settlement_id": gateway.settlement_id,
+                    "settlement_utr": gateway.settlement_utr,
+                },
+            }
+
+    for bank in data.bank_rows:
+        if bank.row_id in wanted:
+            digest[bank.row_id] = {
+                "source": "bank",
+                "kind": "credit" if bank.credit_paise else "debit",
+                "amount_paise": bank.credit_paise or bank.debit_paise,
+                # No currency column on a bank row: the statement is single-currency by
+                # construction and `normalize` refuses anything else, so claiming one here would
+                # be inventing a field.
+                "value_date_ist": bank.value_date_ist,
+                "keys": {"reference": bank.reference, "narration": bank.narration},
+            }
+
+    return digest
 
 
 def _write_ledger(

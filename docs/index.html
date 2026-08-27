@@ -4,78 +4,401 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FinCtl — reconciliation run</title>
+<meta name="description" content="Payment reconciliation: what matched, what did not, and why.">
 <style>
+/* FinCtl UI. Inlined into the page by scripts/render_report.py -- kept as a real file so it is
+   editable and reviewable, but never fetched at runtime. No framework, no build step.
+
+   Palette: grayscale, plus exactly two accents. One for money that reconciled, one for money that
+   did not. A third colour would imply a third outcome, and there are only two. */
+
+:root {
+  --ink: #16181d;
+  --ink-2: #40454e;
+  --muted: #6b7280;
+  --rule: #e3e6ea;
+  --rule-2: #f0f2f4;
+  --bg: #ffffff;
+  --bg-2: #fafbfc;
+
+  --resolved: #1f6f4a;
+  --exception: #a5401a;
+
+  --focus: #16181d;
+
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+@media (prefers-color-scheme: dark) {
   :root {
-    --ink: #16181d; --muted: #6b7280; --rule: #e5e7eb; --bg: #ffffff;
-    --resolved: #1f6f4a; --exception: #a5401a;
+    --ink: #e8eaed;
+    --ink-2: #b8bdc5;
+    --muted: #9aa0a6;
+    --rule: #2c3037;
+    --rule-2: #21242a;
+    --bg: #14161a;
+    --bg-2: #191c21;
+
+    --resolved: #52b184;
+    --exception: #dd8055;
+
+    --focus: #e8eaed;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --ink: #e8eaed; --muted: #9aa0a6; --rule: #2c2f35; --bg: #14161a;
-      --resolved: #4fae82; --exception: #d97a51;
-    }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  padding: 2.5rem 1.25rem 5rem;
+  background: var(--bg);
+  color: var(--ink);
+  /* Monospace with tabular numerals everywhere: every number on this page is meant to be
+     compared against the number above it, and proportional digits break vertical alignment. */
+  font: 400 15px/1.55 var(--mono);
+  font-variant-numeric: tabular-nums;
+  -moz-font-feature-settings: "tnum";
+  font-feature-settings: "tnum";
+}
+
+main { max-width: 64rem; margin: 0 auto; }
+
+/* --- header ------------------------------------------------------------------------------ */
+
+h1 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 .3rem;
+}
+
+.tagline { color: var(--ink-2); margin: 0 0 .9rem; font-size: .85rem; max-width: 46rem; }
+
+.provenance {
+  color: var(--muted);
+  font-size: .74rem;
+  margin: 0 0 2.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .3rem 1rem;
+}
+.provenance b { font-weight: 500; color: var(--ink-2); }
+
+.warn {
+  color: var(--exception);
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: .5rem .7rem;
+  font-size: .76rem;
+  margin: 0 0 1.75rem;
+}
+
+h2 {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 3rem 0 .9rem;
+  padding-bottom: .4rem;
+  border-bottom: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+h2 .aside { font-weight: 400; font-size: .72rem; }
+
+.note { color: var(--muted); font-size: .76rem; margin: .8rem 0 0; max-width: 52rem; }
+
+/* --- metrics strip ----------------------------------------------------------------------- */
+
+.strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cell { background: var(--bg); padding: .85rem .9rem; }
+.cell dt { color: var(--muted); font-size: .7rem; margin: 0 0 .35rem; font-weight: 400; }
+.cell dd {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.cell .sub { display: block; font-size: .7rem; color: var(--muted); margin-top: .3rem; font-weight: 400; }
+.cell.good dd { color: var(--resolved); }
+.cell.bad dd { color: var(--exception); }
+
+/* --- cascade ----------------------------------------------------------------------------- */
+
+.cascade { display: flex; flex-direction: column; gap: .5rem; }
+
+.rung { display: grid; grid-template-columns: 11.5rem 1fr; gap: .75rem; align-items: center; }
+.rung .lbl { font-size: .8rem; }
+.rung .lbl small { display: block; color: var(--muted); font-size: .68rem; }
+
+.track {
+  position: relative;
+  background: var(--rule-2);
+  border-radius: 1px;
+  height: 1.6rem;
+  display: flex;
+  align-items: center;
+}
+
+/* Width is set inline from the data, because the value IS the datum -- a stylesheet cannot know
+   it. Nothing else about the bar is inline. */
+.fill { height: 100%; background: var(--resolved); border-radius: 1px; min-width: 2px; }
+.rung.dead .fill { background: var(--muted); }
+.rung.out .fill { background: var(--exception); }
+
+.rung .qty {
+  position: absolute;
+  left: .55rem;
+  font-size: .74rem;
+  color: var(--ink);
+  /* The label sits on top of the fill, which can be either accent or the track behind it.
+     A shadow in the page background colour keeps it legible over all three without a second
+     colour or an opacity trick. */
+  text-shadow: 0 0 3px var(--bg), 0 0 3px var(--bg), 0 0 2px var(--bg);
+}
+.rung .qty .of { color: var(--muted); }
+
+/* --- exception table --------------------------------------------------------------------- */
+
+.by-type {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .8rem;
+  margin-bottom: 2rem;
+}
+.by-type th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: .7rem;
+  padding: 0 .5rem .35rem 0;
+  border-bottom: 1px solid var(--rule);
+}
+.by-type td { padding: .35rem .5rem .35rem 0; border-bottom: 1px solid var(--rule-2); }
+.by-type tr:last-child td { border-bottom: none; }
+
+/* Money and counts right-aligned, always. A column of amounts is read by scanning the ones
+   digit, and centring or left-aligning them makes that impossible. */
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+th.num { padding-right: 0; }
+
+.queue { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 2px; }
+
+/* <details>/<summary> rather than a scripted table: keyboard operation, Enter/Space, and screen
+   reader expanded-state come from the element for free, and no JS means no way for the toggle to
+   break. The grid gives the alignment a table would. */
+.item { background: var(--bg); }
+.item > summary {
+  display: grid;
+  grid-template-columns: 1.1rem 1fr 6.5rem 10rem;
+  gap: .6rem;
+  align-items: baseline;
+  padding: .6rem .8rem;
+  cursor: pointer;
+  list-style: none;
+  font-size: .8rem;
+}
+.item > summary::-webkit-details-marker { display: none; }
+.item > summary:hover { background: var(--bg-2); }
+
+/* Text marker, not an icon pack. */
+.item > summary .mark { color: var(--muted); font-size: .8rem; user-select: none; }
+.item > summary .mark::before { content: "+"; }
+.item[open] > summary .mark::before { content: "\2212"; }
+
+.item > summary .what { color: var(--ink); }
+.item > summary .where { display: block; color: var(--muted); font-size: .68rem; margin-top: .2rem; }
+.item > summary .cnt { color: var(--muted); font-size: .74rem; }
+.item > summary .amt { color: var(--exception); }
+
+.body { padding: .2rem .8rem 1.1rem 2.5rem; border-top: 1px solid var(--rule-2); }
+.body > p { margin: .8rem 0 0; font-size: .78rem; color: var(--ink-2); max-width: 52rem; }
+
+.body h3 {
+  font-size: .68rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 1.4rem 0 .5rem;
+}
+.body h3 .flag { font-weight: 400; color: var(--exception); }
+.body h3 .ok { font-weight: 400; color: var(--muted); }
+
+.ev { width: 100%; border-collapse: collapse; font-size: .74rem; }
+.ev th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--muted);
+  font-size: .67rem;
+  padding: 0 .6rem .3rem 0;
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.ev td {
+  padding: .3rem .6rem .3rem 0;
+  border-bottom: 1px solid var(--rule-2);
+  vertical-align: top;
+}
+.ev tr:last-child td { border-bottom: none; }
+.ev .rid { color: var(--ink-2); white-space: nowrap; }
+.ev .keys { color: var(--muted); font-size: .69rem; }
+.ev .keys span { margin-right: .7rem; white-space: nowrap; }
+.ev .pair td { border-bottom: none; padding-bottom: 0; }
+.ev .pairsum { color: var(--resolved); }
+
+.subset { margin: 0 0 .5rem; }
+.subset .ids { color: var(--ink-2); }
+.subset .eq { color: var(--muted); }
+
+.trail { width: 100%; border-collapse: collapse; font-size: .72rem; }
+.trail th {
+  text-align: left; font-weight: 500; color: var(--muted); font-size: .67rem;
+  padding: 0 .6rem .3rem 0; border-bottom: 1px solid var(--rule);
+}
+.trail td { padding: .3rem .6rem; border-bottom: 1px solid var(--rule-2); vertical-align: top; }
+.trail td:first-child { padding-left: 0; }
+.trail tr:last-child td { border-bottom: none; }
+.trail .hash { color: var(--muted); white-space: nowrap; }
+.trail .det { color: var(--ink-2); }
+
+.empty {
+  padding: 1.5rem .9rem;
+  color: var(--muted);
+  font-size: .78rem;
+  text-align: center;
+  background: var(--bg);
+}
+.empty code {
+  color: var(--ink);
+  background: var(--rule-2);
+  padding: .1rem .35rem;
+  border-radius: 2px;
+}
+
+/* --- raw blocks -------------------------------------------------------------------------- */
+
+pre {
+  background: var(--bg-2);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: .9rem 1rem;
+  overflow-x: auto;
+  font-size: .72rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+details.raw > summary {
+  cursor: pointer;
+  font-size: .76rem;
+  color: var(--muted);
+  padding: .4rem 0;
+  list-style: none;
+}
+details.raw > summary::-webkit-details-marker { display: none; }
+details.raw > summary::before { content: "+ "; }
+details.raw[open] > summary::before { content: "\2212 "; }
+details.raw > summary:hover { color: var(--ink); }
+
+footer {
+  margin-top: 3.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: .72rem;
+}
+footer a { color: inherit; }
+
+/* --- focus, motion, small screens -------------------------------------------------------- */
+
+/* Visible focus on everything interactive, including summary elements, which several UA
+   stylesheets leave unstyled. */
+a:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 1px;
+}
+summary:focus:not(:focus-visible) { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 2.5rem 1.25rem 4rem; background: var(--bg); color: var(--ink);
-    font: 400 15px/1.55 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 46rem) {
+  body { padding: 1.75rem .9rem 4rem; font-size: 14px; }
+
+  /* The cascade stacks: a 11.5rem label column plus a bar does not fit a phone, and shrinking
+     the label to fit would truncate the layer names, which are the point. */
+  .rung { grid-template-columns: 1fr; gap: .3rem; }
+  .rung .lbl small { display: inline; margin-left: .4rem; }
+
+  /* Amount stays on its own row and stays right-aligned rather than being dropped -- it is the
+     column an operator triages on. */
+  .item > summary {
+    grid-template-columns: 1.1rem 1fr;
+    row-gap: .35rem;
   }
-  main { max-width: 62rem; margin: 0 auto; }
-  h1 { font-size: 1.1rem; font-weight: 600; margin: 0 0 .25rem; letter-spacing: -0.01em; }
-  .run { color: var(--muted); font-size: .8rem; margin-bottom: 2.25rem; }
-  h2 {
-    font-size: .75rem; font-weight: 600; text-transform: none; color: var(--muted);
-    margin: 2.5rem 0 .75rem; padding-bottom: .35rem; border-bottom: 1px solid var(--rule);
-  }
-  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
-  th { text-align: left; font-weight: 500; color: var(--muted); padding: .3rem 0; }
-  td { padding: .3rem 0; border-top: 1px solid var(--rule); }
-  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
-  .cascade div { margin: .3rem 0; display: flex; align-items: center; gap: .6rem; }
-  .cascade .bar {
-    height: .7rem; background: var(--resolved); border-radius: 1px; min-width: 1px;
-  }
-  .cascade .lbl { width: 11rem; flex: none; }
-  .cascade .val { color: var(--muted); font-size: .78rem; }
-  .ex .bar { background: var(--exception); }
-  pre {
-    background: transparent; border: 1px solid var(--rule); border-radius: 2px;
-    padding: .9rem 1rem; overflow-x: auto; font-size: .76rem; line-height: 1.5;
-  }
-  .note { color: var(--muted); font-size: .78rem; margin: .6rem 0 0; }
-  a { color: inherit; }
-  a:focus-visible, :focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  .item > summary .cnt,
+  .item > summary .amt { grid-column: 2; text-align: left; }
+  .item > summary .amt { font-size: .85rem; }
+
+  .body { padding-left: 1rem; }
+
+  /* Evidence tables scroll rather than reflow: the row-id and amount columns must stay on one
+     line to remain comparable. */
+  .ev-wrap, .trail-wrap { overflow-x: auto; }
+
+  .cell dd { font-size: 1.2rem; }
+}
+
 </style>
 </head>
 <body>
 <main>
-  <h1>FinCtl — payment reconciliation</h1>
-  <p class="run">dev_seed_11 · data 1115450f · code 1e0b9b7 · 2026-08-27 13:48 · 262 ms</p>
+  <h1>FinCtl &mdash; payment reconciliation</h1>
+  <p class="tagline">Three sources describe the same money. Gateways settle in net batches, so reconciling one bank credit is set reconstruction against a single scalar, not row-to-row matching.</p>
+  <p class="provenance"><span><b>Dataset</b> dev_seed_11</span> <span><b>Data</b> 1115450f</span> <span><b>Code</b> 2bc161f</span> <span><b>Run</b> 2026-08-27 14:34 UTC</span> <span><b>Wall clock</b> 269 ms</span> <span><b>Adjudicator</b> offline_stub gemini-3.7-flash (replay)</span> <span><b>Ledger</b> 42 entries, head 51b54deedc60</span></p>
+  <p class="warn">Mixed adjudication: some Layer 4 responses in this run came from an offline stub rather than a model. The split, and why, is in <code>docs/METRICS.md</code>.</p>
 
-  <h2>The cascade</h2>
-  <div class="cascade"><div><span class="lbl">Layer 1 · exact</span><span class="bar" style="width:58.24%"></span><span class="val">325 · 58.2%</span></div><div><span class="lbl">Layer 2 · netting</span><span class="bar" style="width:13.08%"></span><span class="val">73 · 13.1%</span></div><div><span class="lbl">Layer 4 · adjudicated</span><span class="bar" style="width:4.84%"></span><span class="val">27 · 4.8%</span></div><div class="ex"><span class="lbl">Could not match</span><span class="bar" style="width:23.84%"></span><span class="val">133 · 23.8%</span></div></div>
-  <p class="note">Bar width is the share of all records resolved at that layer. Each layer sees only what the layers above it could not settle.</p>
+  <h2>What happened <span class="aside">dev_seed_11, evaluated in full</span></h2>
+  <dl class="strip"><div class="cell "><dt>Records</dt><dd>558<span class="sub">across three sources</span></dd></div><div class="cell good"><dt>Auto-matched</dt><dd>76.2%<span class="sub">425 of 558 records</span></dd></div><div class="cell good"><dt>False matches</dt><dd>0.00%<span class="sub">0 of 425 matched</span></dd></div><div class="cell bad"><dt>Could not match</dt><dd>133<span class="sub">23.8% of records</span></dd></div><div class="cell bad"><dt>Amount at risk</dt><dd>Rs 1,14,61,299.74<span class="sub">in the queue below</span></dd></div><div class="cell "><dt>Model calls</dt><dd>0<span class="sub">0.00 per 100 records</span></dd></div></dl>
 
-  <h2>Measured</h2>
-  <table>
-    <tbody><tr><td>Records processed</td><td class='n'>558</td><td class='n'></td></tr><tr><td>Auto-matched</td><td class='n'>425</td><td class='n'>76.2%</td></tr><tr><td>False matches — precision, not coverage</td><td class='n'>0</td><td class='n'>0.0%</td></tr><tr><td>Could not match</td><td class='n'>133</td><td class='n'>23.8%</td></tr><tr><td>  of which correctly declined</td><td class='n'>94</td><td class='n'>70.7%</td></tr><tr><td>  of which missed</td><td class='n'>39</td><td class='n'>29.3%</td></tr><tr><td>Amount at risk</td><td class='n'>Rs 1,14,61,299.74</td><td class='n'></td></tr><tr><td>Model calls</td><td class='n'>0</td><td class='n'>0.00 / 100</td></tr><tr><td>Rules learned from narration</td><td class='n'>2</td><td class='n'>of 3 cached</td></tr><tr><td>Audit ledger</td><td class='n'>42 entries</td><td class='n'>51b54deedc60</td></tr></tbody>
-  </table>
+  <h2>The cascade <span class="aside">bar width is how many records arrived at that layer</span></h2>
+  <div class="cascade"><div class="rung"><span class="lbl">Matched on reference<small>exact identity</small></span><span class="track"><span class="fill" style="width:100.00%"></span><span class="qty">558 arrived <span class="of">&middot; settled 325</span></span></span></div><div class="rung"><span class="lbl">Rebuilt the batch<small>net settlement reconstruction</small></span><span class="track"><span class="fill" style="width:41.76%"></span><span class="qty">233 arrived <span class="of">&middot; settled 73</span></span></span></div><div class="rung dead"><span class="lbl">Best global assignment<small>one-to-one, globally optimal</small></span><span class="track"><span class="fill" style="width:28.67%"></span><span class="qty">160 arrived <span class="of">&middot; settled none of them</span></span></span></div><div class="rung"><span class="lbl">Read the narration<small>model proposes, verifier approves</small></span><span class="track"><span class="fill" style="width:28.67%"></span><span class="qty">160 arrived <span class="of">&middot; settled 27</span></span></span></div><div class="rung out"><span class="lbl">Could not match<small>declined, with a reason</small></span><span class="track"><span class="fill" style="width:23.84%"></span><span class="qty">133 records <span class="of">&middot; 23.8% of the run</span></span></span></div></div>
+  <p class="note">Each layer sees only what the layers above it could not settle, so the bars narrow. A layer whose bar matches the one above it resolved nothing on this dataset — which is a result about the layer, not a rendering artefact.</p>
 
-  <h2>Could not match — 133 records</h2>
-  <table>
-    <thead><tr><th>Reason</th><th class="n">Records</th></tr></thead>
-    <tbody><tr><td>Settles outside this period — pending writeback</td><td class='n'>44</td></tr><tr><td>Two or more candidates fit equally — declined on purpose</td><td class='n'>43</td></tr><tr><td>Settled at the gateway, no bank credit found</td><td class='n'>32</td></tr><tr><td>Credit exists, its narration cannot be read</td><td class='n'>32</td></tr><tr><td>Search hit its bound before finding an answer</td><td class='n'>13</td></tr><tr><td>Bank credit with no gateway batch behind it</td><td class='n'>1</td></tr></tbody>
-  </table>
-  <p class="note">Declining is a success where the data does not determine an answer. 56 of these have no counterpart in the data at all; 38 have one that cannot be identified.</p>
+  <h2>Could not match <span class="aside">13 exceptions covering 133 records</span></h2>
+  <table class="by-type"><thead><tr><th>Reason</th><th class="num">Records</th><th class="num">Share</th></tr></thead><tbody><tr><td>Settles after this period closes</td><td class="num">44</td><td class="num">26.7%</td></tr><tr><td>More than one reading fits equally well</td><td class="num">43</td><td class="num">26.1%</td></tr><tr><td>Settled at the gateway, no bank credit found</td><td class="num">32</td><td class="num">19.4%</td></tr><tr><td>Credit is there, its narration cannot be read</td><td class="num">32</td><td class="num">19.4%</td></tr><tr><td>Search hit its bound before finding an answer</td><td class="num">13</td><td class="num">7.9%</td></tr><tr><td>Bank credit with no gateway batch behind it</td><td class="num">1</td><td class="num">0.6%</td></tr></tbody></table>
+  <div class="queue"><details class="item" id="ex012"><summary><span class="mark" aria-hidden="true"></span><span class="what">Settles after this period closes<span class="where">found at layer 4 &middot; TIMING_OUTSIDE_WINDOW</span></span><span class="cnt num">44 recs</span><span class="amt num">Rs 41,11,563.15</span></summary><div class="body"><p>44 gateway rows carry no settlement assignment, and no in-period batch needed them. Their settlement falls outside the period this export covers - pending writeback, not a reconciliation failure.</p><h3>Records named <span class="ok">44</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000022</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 80,229.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000022</span></td></tr><tr><td class="rid">gw_000025</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,68,753.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000025</span></td></tr><tr><td class="rid">gw_000026</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 26,801.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000026</span></td></tr><tr><td class="rid">gw_000028</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,16,247.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000028</span></td></tr><tr><td class="rid">gw_000030</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 86,733.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000030</span></td></tr><tr><td class="rid">gw_000033</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 55,218.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000033</span></td></tr><tr><td class="rid">gw_000034</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,67,377.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000034</span></td></tr><tr><td class="rid">gw_000035</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 4,565.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000035</span></td></tr><tr><td class="rid">gw_000036</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 97,145.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000036</span></td></tr><tr><td class="rid">gw_000037</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,63,592.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000037</span></td></tr><tr><td class="rid">gw_000039</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,27,305.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000039</span></td></tr><tr><td class="rid">gw_000040</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 36,082.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000040</span></td></tr><tr><td class="rid">gw_000042</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 81,977.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000042</span></td></tr><tr><td class="rid">gw_000043</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,14,881.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000043</span></td></tr><tr><td class="rid">gw_000044</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 65,904.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000044</span></td></tr><tr><td class="rid">gw_000045</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 42,043.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000045</span></td></tr><tr><td class="rid">gw_000046</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 52,034.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000046</span></td></tr><tr><td class="rid">gw_000047</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,31,760.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000047</span></td></tr><tr><td class="rid">gw_000048</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,58,712.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000048</span></td></tr><tr><td class="rid">gw_000049</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,10,982.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000049</span></td></tr><tr><td class="rid">gw_000050</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 27,720.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000050</span></td></tr><tr><td class="rid">gw_000051</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 10,644.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000051</span></td></tr><tr><td class="rid">gw_000052</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 67,393.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000052</span></td></tr><tr><td class="rid">gw_000053</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,94,441.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000053</span></td></tr><tr><td class="rid">gw_000054</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 67,866.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000054</span></td></tr><tr><td class="rid">gw_000055</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,16,432.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000055</span></td></tr><tr><td class="rid">gw_000056</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,29,212.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000056</span></td></tr><tr><td class="rid">gw_000057</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,36,834.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000057</span></td></tr><tr><td class="rid">gw_000058</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,44,093.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000058</span></td></tr><tr><td class="rid">gw_000059</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 33,635.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000059</span></td></tr><tr><td class="rid">gw_000148</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,50,705.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000148</span></td></tr><tr><td class="rid">gw_000149</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,50,705.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000149</span></td></tr><tr><td class="rid">gw_000150</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,50,705.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000150</span></td></tr><tr><td class="rid">gw_000151</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,50,705.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000151</span></td></tr><tr><td class="rid">gw_000152</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,50,705.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000152</span></td></tr><tr><td class="rid">gw_000288</td><td>Gateway<br><span class="keys">refund</span></td><td class="num">Rs 62,016.00<br><span class="keys">2026-03-11 12:00 IST</span></td><td class="keys"><span>payment_id pay_000001</span><span>order_id order_000001</span></td></tr><tr><td class="rid">gw_000289</td><td>Gateway<br><span class="keys">refund</span></td><td class="num">Rs 214.00<br><span class="keys">2026-04-01 23:58 IST</span></td><td class="keys"><span>payment_id pay_000005</span><span>order_id order_000005</span></td></tr><tr><td class="rid">gw_000290</td><td>Gateway<br><span class="keys">refund</span></td><td class="num">Rs 15,692.33<br><span class="keys">2026-03-26 12:00 IST</span></td><td class="keys"><span>payment_id pay_000015</span><span>order_id order_000015</span></td></tr><tr><td class="rid">gw_000291</td><td>Gateway<br><span class="keys">adjustment</span></td><td class="num">Rs 20,443.00<br><span class="keys">2026-03-19 12:00 IST</span></td><td class="keys"><span>payment_id pay_000159</span></td></tr><tr><td class="rid">gw_000292</td><td>Gateway<br><span class="keys">adjustment</span></td><td class="num">Rs 20,443.00<br><span class="keys">2026-03-19 12:00 IST</span></td><td class="keys"><span>payment_id pay_000159</span></td></tr><tr><td class="rid">gw_000293</td><td>Gateway<br><span class="keys">adjustment</span></td><td class="num">Rs 56,404.00<br><span class="keys">2026-03-27 12:00 IST</span></td><td class="keys"><span>payment_id pay_000042</span></td></tr><tr><td class="rid">gw_000294</td><td>Gateway<br><span class="keys">adjustment</span></td><td class="num">Rs 56,404.00<br><span class="keys">2026-03-27 12:00 IST</span></td><td class="keys"><span>payment_id pay_000042</span></td></tr><tr><td class="rid">gw_000299</td><td>Gateway<br><span class="keys">adjustment</span></td><td class="num">Rs 2,327.00<br><span class="keys">2026-03-31 10:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr><td class="rid">gw_000300</td><td>Gateway<br><span class="keys">adjustment</span></td><td class="num">Rs 1,180.00<br><span class="keys">2026-03-31 10:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">39</td><td>L4</td><td>raise_exception</td><td>TIMING_OUTSIDE_WINDOW</td><td class="hash">bfec27888b38</td><td class="det">44 gateway rows carry no settlement assignment, and no in-period batch needed them. Their settlement falls outside the period this export covers - pending writeback, not a reconciliation failure.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex004"><summary><span class="mark" aria-hidden="true"></span><span class="what">Search hit its bound before finding an answer<span class="where">found at layer 2 &middot; SUBSET_SEARCH_EXHAUSTED</span></span><span class="cnt num">13 recs</span><span class="amt num">Rs 13,28,937.04</span></summary><div class="body"><p>search hit its nodes bound at subset size 8 after 200001 nodes over 62 candidates, with 0 subsets found so far - a lower bound, not a total. Neither a match nor an ambiguity can be claimed from an incomplete search.</p><h3>Records named <span class="ok">13</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000015</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 47,077.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000015</span><span>settlement_id setl_000003</span><span>settlement_utr 1749612677hipgad</span></td></tr><tr><td class="rid">gw_000016</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 49,884.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000016</span><span>settlement_id setl_000003</span><span>settlement_utr 1749612677hipgad</span></td></tr><tr><td class="rid">gw_000017</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 50,486.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000017</span><span>settlement_id setl_000003</span><span>settlement_utr 1749612677hipgad</span></td></tr><tr><td class="rid">gw_000018</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,10,398.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000018</span><span>settlement_id setl_000003</span><span>settlement_utr 1749612677hipgad</span></td></tr><tr><td class="rid">gw_000019</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 31,041.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000019</span><span>settlement_id setl_000003</span><span>settlement_utr 1749612677hipgad</span></td></tr><tr><td class="rid">gw_000020</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,10,798.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000020</span><span>settlement_id setl_000003</span><span>settlement_utr 1749612677hipgad</span></td></tr><tr><td class="rid">bk_000003</td><td>Bank statement<br><span class="keys">credit</span></td><td class="num">Rs 17,19,188.50<br><span class="keys">2026-03-27 IST</span></td><td class="keys"><span>reference 1749612677hipgad</span><span>narration NEFT-RAZORPAYSOFTWARE-UTR1749612677hipgad-STL</span></td></tr><tr><td class="rid">ml_000015</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 47,077.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000015</span><span>gateway_order_id order_000015</span><span>customer_ref cust_000015</span></td></tr><tr><td class="rid">ml_000016</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 49,884.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000016</span><span>gateway_order_id order_000016</span><span>customer_ref cust_000016</span></td></tr><tr><td class="rid">ml_000017</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 50,486.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000017</span><span>gateway_order_id order_000017</span><span>customer_ref cust_000017</span></td></tr><tr><td class="rid">ml_000018</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,10,398.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000018</span><span>gateway_order_id order_000018</span><span>customer_ref cust_000018</span></td></tr><tr><td class="rid">ml_000019</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 31,041.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000019</span><span>gateway_order_id order_000019</span><span>customer_ref cust_000019</span></td></tr><tr><td class="rid">ml_000020</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,10,798.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000020</span><span>gateway_order_id order_000020</span><span>customer_ref cust_000020</span></td></tr></tbody></table></div><h3>Evidence <span class="flag">none recorded &mdash; count is a lower bound</span></h3><p class="note">The search stopped at its bound before finding any subset that closes the gap, so no candidate can be shown and the true number of subsets is unknown. This is the stopping rule firing, not a claim that none exists.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">38</td><td>L2</td><td>raise_exception</td><td>SUBSET_SEARCH_EXHAUSTED</td><td class="hash">bcead4d07560</td><td class="det">search hit its nodes bound at subset size 8 after 200001 nodes over 62 candidates, with 0 subsets found so far - a lower bound, not a total. Neither a match nor an ambiguity can be claimed from an incomplete search.</td></tr></tbody></table></div></div></details><details class="item" id="ex002"><summary><span class="mark" aria-hidden="true"></span><span class="what">Settled at the gateway, no bank credit found<span class="where">found at layer 1 &middot; MISSING_BANK_ROW</span></span><span class="cnt num">12 recs</span><span class="amt num">Rs 8,69,046.39</span></summary><div class="body"><p>setl_000028 settled with UTR 1585862611g2e9cy but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</p><h3>Records named <span class="ok">12</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000233</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,24,169.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000233</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000234</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,24,809.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000234</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000235</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,60,714.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000235</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000236</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 15,847.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000236</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000237</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,48,297.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000237</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000238</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,10,784.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000238</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">ml_000171</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,24,169.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000233</span><span>gateway_order_id order_000233</span><span>customer_ref cust_000171</span></td></tr><tr><td class="rid">ml_000172</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,24,809.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000234</span><span>gateway_order_id order_000234</span><span>customer_ref cust_000172</span></td></tr><tr><td class="rid">ml_000173</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,60,714.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000235</span><span>gateway_order_id order_000235</span><span>customer_ref cust_000173</span></td></tr><tr><td class="rid">ml_000174</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 15,847.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000236</span><span>gateway_order_id order_000236</span><span>customer_ref cust_000174</span></td></tr><tr><td class="rid">ml_000175</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,48,297.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000237</span><span>gateway_order_id order_000237</span><span>customer_ref cust_000175</span></td></tr><tr><td class="rid">ml_000176</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,10,784.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000238</span><span>gateway_order_id order_000238</span><span>customer_ref cust_000176</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">36</td><td>L1</td><td>raise_exception</td><td>MISSING_BANK_ROW</td><td class="hash">924b13fc01d0</td><td class="det">setl_000028 settled with UTR 1585862611g2e9cy but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</td></tr><tr><td class="num">42</td><td>L4</td><td>raise_exception</td><td>UNPARSEABLE_NARRATION</td><td class="hash">51b54deedc60</td><td class="det">setl_000028 settled with UTR 1585862611g2e9cy and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex011"><summary><span class="mark" aria-hidden="true"></span><span class="what">Credit is there, its narration cannot be read<span class="where">found at layer 4 &middot; UNPARSEABLE_NARRATION</span></span><span class="cnt num">12 recs</span><span class="amt num">Rs 8,69,046.39</span></summary><div class="body"><p>setl_000028 settled with UTR 1585862611g2e9cy and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.</p><h3>Records named <span class="ok">12</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000233</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,24,169.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000233</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000234</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,24,809.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000234</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000235</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,60,714.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000235</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000236</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 15,847.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000236</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000237</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,48,297.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000237</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">gw_000238</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,10,784.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_id order_000238</span><span>settlement_id setl_000028</span><span>settlement_utr 1585862611g2e9cy</span></td></tr><tr><td class="rid">ml_000171</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,24,169.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000233</span><span>gateway_order_id order_000233</span><span>customer_ref cust_000171</span></td></tr><tr><td class="rid">ml_000172</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,24,809.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000234</span><span>gateway_order_id order_000234</span><span>customer_ref cust_000172</span></td></tr><tr><td class="rid">ml_000173</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,60,714.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000235</span><span>gateway_order_id order_000235</span><span>customer_ref cust_000173</span></td></tr><tr><td class="rid">ml_000174</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 15,847.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000236</span><span>gateway_order_id order_000236</span><span>customer_ref cust_000174</span></td></tr><tr><td class="rid">ml_000175</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,48,297.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000237</span><span>gateway_order_id order_000237</span><span>customer_ref cust_000175</span></td></tr><tr><td class="rid">ml_000176</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,10,784.00<br><span class="keys">2026-03-17 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000238</span><span>gateway_order_id order_000238</span><span>customer_ref cust_000176</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">36</td><td>L1</td><td>raise_exception</td><td>MISSING_BANK_ROW</td><td class="hash">924b13fc01d0</td><td class="det">setl_000028 settled with UTR 1585862611g2e9cy but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</td></tr><tr><td class="num">42</td><td>L4</td><td>raise_exception</td><td>UNPARSEABLE_NARRATION</td><td class="hash">51b54deedc60</td><td class="det">setl_000028 settled with UTR 1585862611g2e9cy and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex000"><summary><span class="mark" aria-hidden="true"></span><span class="what">Settled at the gateway, no bank credit found<span class="where">found at layer 1 &middot; MISSING_BANK_ROW</span></span><span class="cnt num">12 recs</span><span class="amt num">Rs 7,81,997.79</span></summary><div class="body"><p>setl_000023 settled with UTR 1675464054gdi3eg but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</p><h3>Records named <span class="ok">12</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000197</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,22,910.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000197</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000198</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,35,579.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000198</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000199</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 55,572.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000199</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000200</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 98,320.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000200</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000201</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,66,700.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000201</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000202</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,21,818.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000202</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">ml_000135</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,22,910.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000197</span><span>gateway_order_id order_000197</span><span>customer_ref cust_000135</span></td></tr><tr><td class="rid">ml_000136</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,35,579.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000198</span><span>gateway_order_id order_000198</span><span>customer_ref cust_000136</span></td></tr><tr><td class="rid">ml_000137</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 55,572.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000199</span><span>gateway_order_id order_000199</span><span>customer_ref cust_000137</span></td></tr><tr><td class="rid">ml_000138</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 98,320.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000200</span><span>gateway_order_id order_000200</span><span>customer_ref cust_000138</span></td></tr><tr><td class="rid">ml_000139</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,66,700.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000201</span><span>gateway_order_id order_000201</span><span>customer_ref cust_000139</span></td></tr><tr><td class="rid">ml_000140</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,21,818.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000202</span><span>gateway_order_id order_000202</span><span>customer_ref cust_000140</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">34</td><td>L1</td><td>raise_exception</td><td>MISSING_BANK_ROW</td><td class="hash">4389f90d9cfa</td><td class="det">setl_000023 settled with UTR 1675464054gdi3eg but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</td></tr><tr><td class="num">40</td><td>L4</td><td>raise_exception</td><td>UNPARSEABLE_NARRATION</td><td class="hash">09695c3a259a</td><td class="det">setl_000023 settled with UTR 1675464054gdi3eg and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex009"><summary><span class="mark" aria-hidden="true"></span><span class="what">Credit is there, its narration cannot be read<span class="where">found at layer 4 &middot; UNPARSEABLE_NARRATION</span></span><span class="cnt num">12 recs</span><span class="amt num">Rs 7,81,997.79</span></summary><div class="body"><p>setl_000023 settled with UTR 1675464054gdi3eg and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.</p><h3>Records named <span class="ok">12</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000197</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,22,910.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000197</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000198</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,35,579.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000198</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000199</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 55,572.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000199</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000200</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 98,320.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000200</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000201</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,66,700.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000201</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">gw_000202</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,21,818.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_id order_000202</span><span>settlement_id setl_000023</span><span>settlement_utr 1675464054gdi3eg</span></td></tr><tr><td class="rid">ml_000135</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,22,910.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000197</span><span>gateway_order_id order_000197</span><span>customer_ref cust_000135</span></td></tr><tr><td class="rid">ml_000136</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,35,579.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000198</span><span>gateway_order_id order_000198</span><span>customer_ref cust_000136</span></td></tr><tr><td class="rid">ml_000137</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 55,572.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000199</span><span>gateway_order_id order_000199</span><span>customer_ref cust_000137</span></td></tr><tr><td class="rid">ml_000138</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 98,320.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000200</span><span>gateway_order_id order_000200</span><span>customer_ref cust_000138</span></td></tr><tr><td class="rid">ml_000139</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,66,700.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000201</span><span>gateway_order_id order_000201</span><span>customer_ref cust_000139</span></td></tr><tr><td class="rid">ml_000140</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,21,818.00<br><span class="keys">2026-03-10 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000202</span><span>gateway_order_id order_000202</span><span>customer_ref cust_000140</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">34</td><td>L1</td><td>raise_exception</td><td>MISSING_BANK_ROW</td><td class="hash">4389f90d9cfa</td><td class="det">setl_000023 settled with UTR 1675464054gdi3eg but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</td></tr><tr><td class="num">40</td><td>L4</td><td>raise_exception</td><td>UNPARSEABLE_NARRATION</td><td class="hash">09695c3a259a</td><td class="det">setl_000023 settled with UTR 1675464054gdi3eg and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex001"><summary><span class="mark" aria-hidden="true"></span><span class="what">Settled at the gateway, no bank credit found<span class="where">found at layer 1 &middot; MISSING_BANK_ROW</span></span><span class="cnt num">8 recs</span><span class="amt num">Rs 5,17,078.99</span></summary><div class="body"><p>setl_000024 settled with UTR 182473832603xxzm but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</p><h3>Records named <span class="ok">8</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000203</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 25,351.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000203</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">gw_000204</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,08,209.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000204</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">gw_000205</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 85,355.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000205</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">gw_000206</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,10,662.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000206</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">ml_000141</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 25,351.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000203</span><span>gateway_order_id order_000203</span><span>customer_ref cust_000141</span></td></tr><tr><td class="rid">ml_000142</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,08,209.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000204</span><span>gateway_order_id order_000204</span><span>customer_ref cust_000142</span></td></tr><tr><td class="rid">ml_000143</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 85,355.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000205</span><span>gateway_order_id order_000205</span><span>customer_ref cust_000143</span></td></tr><tr><td class="rid">ml_000144</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,10,662.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000206</span><span>gateway_order_id order_000206</span><span>customer_ref cust_000144</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">35</td><td>L1</td><td>raise_exception</td><td>MISSING_BANK_ROW</td><td class="hash">ad9d2411bd65</td><td class="det">setl_000024 settled with UTR 182473832603xxzm but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</td></tr><tr><td class="num">41</td><td>L4</td><td>raise_exception</td><td>UNPARSEABLE_NARRATION</td><td class="hash">e49cc48ab4e4</td><td class="det">setl_000024 settled with UTR 182473832603xxzm and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex003"><summary><span class="mark" aria-hidden="true"></span><span class="what">Bank credit with no gateway batch behind it<span class="where">found at layer 1 &middot; MISSING_GATEWAY_ROW</span></span><span class="cnt num">1 recs</span><span class="amt num">Rs 5,17,078.99</span></summary><div class="body"><p>bank credit bk_000023 carries reference (none) which matches no settlement. Narration: &#x27;NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT&#x27;</p><h3>Records named <span class="ok">1</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">bk_000023</td><td>Bank statement<br><span class="keys">credit</span></td><td class="num">Rs 5,17,078.99<br><span class="keys">2026-03-10 IST</span></td><td class="keys"><span>narration NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">37</td><td>L1</td><td>raise_exception</td><td>MISSING_GATEWAY_ROW</td><td class="hash">51aefd4fcab6</td><td class="det">bank credit bk_000023 carries reference (none) which matches no settlement. Narration: &#x27;NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT&#x27;</td></tr></tbody></table></div></div></details><details class="item" id="ex010"><summary><span class="mark" aria-hidden="true"></span><span class="what">Credit is there, its narration cannot be read<span class="where">found at layer 4 &middot; UNPARSEABLE_NARRATION</span></span><span class="cnt num">8 recs</span><span class="amt num">Rs 5,17,078.99</span></summary><div class="body"><p>setl_000024 settled with UTR 182473832603xxzm and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.</p><h3>Records named <span class="ok">8</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000203</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 25,351.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000203</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">gw_000204</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,08,209.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000204</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">gw_000205</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 85,355.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000205</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">gw_000206</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,10,662.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_id order_000206</span><span>settlement_id setl_000024</span><span>settlement_utr 182473832603xxzm</span></td></tr><tr><td class="rid">ml_000141</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 25,351.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000203</span><span>gateway_order_id order_000203</span><span>customer_ref cust_000141</span></td></tr><tr><td class="rid">ml_000142</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,08,209.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000204</span><span>gateway_order_id order_000204</span><span>customer_ref cust_000142</span></td></tr><tr><td class="rid">ml_000143</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 85,355.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000205</span><span>gateway_order_id order_000205</span><span>customer_ref cust_000143</span></td></tr><tr><td class="rid">ml_000144</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,10,662.00<br><span class="keys">2026-03-06 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000206</span><span>gateway_order_id order_000206</span><span>customer_ref cust_000144</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">the records above</span></h3><p class="note">Nothing to choose between: this reason is established by the records named above rather than by competing candidates.</p><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">35</td><td>L1</td><td>raise_exception</td><td>MISSING_BANK_ROW</td><td class="hash">ad9d2411bd65</td><td class="det">setl_000024 settled with UTR 182473832603xxzm but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.</td></tr><tr><td class="num">41</td><td>L4</td><td>raise_exception</td><td>UNPARSEABLE_NARRATION</td><td class="hash">e49cc48ab4e4</td><td class="det">setl_000024 settled with UTR 182473832603xxzm and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.<br><span class="keys">offline_stub gemini-3.7-flash</span></td></tr></tbody></table></div></div></details><details class="item" id="ex007"><summary><span class="mark" aria-hidden="true"></span><span class="what">Two orders, two payments, nothing tells them apart<span class="where">found at layer 3 &middot; AMBIGUOUS</span></span><span class="cnt num">4 recs</span><span class="amt num">Rs 3,65,434.00</span></summary><div class="body"><p>2 ledger rows and 2 gateway payments of Rs 1,82,717.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer&#x27;s account. Refused rather than picked.</p><h3>Records named <span class="ok">4</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">ml_000222</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000288</span></td></tr><tr><td class="rid">ml_000223</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000289</span></td></tr><tr><td class="rid">gw_000295</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr><td class="rid">gw_000296</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">all 4 shown</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr class="pair"><td colspan="4" class="keys">Pairing 1 &mdash; <span class="pairsum">both sides Rs 1,82,717.00</span></td></tr><tr><td class="rid">ml_000222</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000288</span></td></tr><tr><td class="rid">gw_000295</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr class="pair"><td colspan="4" class="keys">Pairing 2 &mdash; <span class="pairsum">both sides Rs 1,82,717.00</span></td></tr><tr><td class="rid">ml_000222</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000288</span></td></tr><tr><td class="rid">gw_000296</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr class="pair"><td colspan="4" class="keys">Pairing 3 &mdash; <span class="pairsum">both sides Rs 1,82,717.00</span></td></tr><tr><td class="rid">ml_000223</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000289</span></td></tr><tr><td class="rid">gw_000295</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr class="pair"><td colspan="4" class="keys">Pairing 4 &mdash; <span class="pairsum">both sides Rs 1,82,717.00</span></td></tr><tr><td class="rid">ml_000223</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000289</span></td></tr><tr><td class="rid">gw_000296</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,82,717.00<br><span class="keys">2026-03-10 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr></tbody></table></div><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">32</td><td>L3</td><td>raise_exception</td><td>AMBIGUOUS</td><td class="hash">4a73b5ad5f1f</td><td class="det">2 ledger rows and 2 gateway payments of Rs 1,82,717.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer&#x27;s account. Refused rather than picked. | evidence 4/4: [ml_000222+gw_000295]=18271700; [ml_000222+gw_000296]=18271700; [ml_000223+gw_000295]=18271700; [ml_000223+gw_000296]=18271700</td></tr></tbody></table></div></div></details><details class="item" id="ex005"><summary><span class="mark" aria-hidden="true"></span><span class="what">Several row subsets close the gap equally well<span class="where">found at layer 2 &middot; AMBIGUOUS</span></span><span class="cnt num">21 recs</span><span class="amt num">Rs 2,94,296.72</span></summary><div class="body"><p>2 distinct subsets of size 5 each close delta Rs 2,94,296.72, so the arithmetic does not determine which rows settled. Refused rather than picking one. 10 pool rows are implicated across the candidate subsets.</p><h3>Records named <span class="ok">21</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000143</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,76,476.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000143</span><span>settlement_id setl_000015</span><span>settlement_utr 1637714577s9k769</span></td></tr><tr><td class="rid">gw_000144</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,22,079.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000144</span><span>settlement_id setl_000015</span><span>settlement_utr 1637714577s9k769</span></td></tr><tr><td class="rid">gw_000145</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 55,088.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000145</span><span>settlement_id setl_000015</span><span>settlement_utr 1637714577s9k769</span></td></tr><tr><td class="rid">gw_000146</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,23,524.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000146</span><span>settlement_id setl_000015</span><span>settlement_utr 1637714577s9k769</span></td></tr><tr><td class="rid">gw_000147</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,43,292.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_id order_000147</span><span>settlement_id setl_000015</span><span>settlement_utr 1637714577s9k769</span></td></tr><tr><td class="rid">bk_000015</td><td>Bank statement<br><span class="keys">credit</span></td><td class="num">Rs 10,95,392.89<br><span class="keys">2026-03-26 IST</span></td><td class="keys"><span>reference 1637714577s9k769</span><span>narration NEFT-RAZORPAYSOFTWARE-UTR1637714577s9k769-STL</span></td></tr><tr><td class="rid">ml_000093</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,76,476.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000143</span><span>gateway_order_id order_000143</span><span>customer_ref cust_000093</span></td></tr><tr><td class="rid">ml_000094</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,22,079.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000144</span><span>gateway_order_id order_000144</span><span>customer_ref cust_000094</span></td></tr><tr><td class="rid">ml_000095</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 55,088.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000145</span><span>gateway_order_id order_000145</span><span>customer_ref cust_000095</span></td></tr><tr><td class="rid">ml_000096</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,23,524.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000146</span><span>gateway_order_id order_000146</span><span>customer_ref cust_000096</span></td></tr><tr><td class="rid">ml_000097</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,43,292.00<br><span class="keys">2026-03-18 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000147</span><span>gateway_order_id order_000147</span><span>customer_ref cust_000097</span></td></tr><tr><td class="rid">gw_000021</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 71,225.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000021</span></td></tr><tr><td class="rid">gw_000023</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 55,736.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000023</span></td></tr><tr><td class="rid">gw_000024</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,03,856.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000024</span></td></tr><tr><td class="rid">gw_000027</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 38,867.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000027</span></td></tr><tr><td class="rid">gw_000029</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 3,010.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000029</span></td></tr><tr><td class="rid">gw_000031</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,01,732.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000031</span></td></tr><tr><td class="rid">gw_000032</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 19,972.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000032</span></td></tr><tr><td class="rid">gw_000038</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 33,850.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000038</span></td></tr><tr><td class="rid">gw_000041</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 48,427.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000041</span></td></tr><tr><td class="rid">gw_000060</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,145.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000060</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">all 2 shown</span></h3><p class="subset"><span class="eq">Subset 1 of 2:</span> <span class="ids">gw_000060 + gw_000024 + gw_000041 + gw_000032 + gw_000029</span> <span class="eq">=</span> <span class="pairsum">Rs 2,94,296.72</span></p><p class="subset"><span class="eq">Subset 2 of 2:</span> <span class="ids">gw_000031 + gw_000021 + gw_000023 + gw_000027 + gw_000038</span> <span class="eq">=</span> <span class="pairsum">Rs 2,94,296.72</span></p><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000021</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 71,225.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000021</span></td></tr><tr><td class="rid">gw_000023</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 55,736.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000023</span></td></tr><tr><td class="rid">gw_000024</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,03,856.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000024</span></td></tr><tr><td class="rid">gw_000027</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 38,867.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000027</span></td></tr><tr><td class="rid">gw_000029</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 3,010.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000029</span></td></tr><tr><td class="rid">gw_000031</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,01,732.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000031</span></td></tr><tr><td class="rid">gw_000032</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 19,972.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000032</span></td></tr><tr><td class="rid">gw_000038</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 33,850.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000038</span></td></tr><tr><td class="rid">gw_000041</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 48,427.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000041</span></td></tr><tr><td class="rid">gw_000060</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,145.00<br><span class="keys">2026-03-25 12:00 IST</span></td><td class="keys"><span>order_id order_000060</span></td></tr></tbody></table></div><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">30</td><td>L2</td><td>raise_exception</td><td>AMBIGUOUS</td><td class="hash">05b91a01365f</td><td class="det">2 distinct subsets of size 5 each close delta Rs 2,94,296.72, so the arithmetic does not determine which rows settled. Refused rather than picking one. 10 pool rows are implicated across the candidate subsets. | evidence 2/2: [gw_000060+gw_000024+gw_000041+gw_000032+gw_000029]=29429672; [gw_000031+gw_000021+gw_000023+gw_000027+gw_000038]=29429672</td></tr></tbody></table></div></div></details><details class="item" id="ex008"><summary><span class="mark" aria-hidden="true"></span><span class="what">Two orders, two payments, nothing tells them apart<span class="where">found at layer 3 &middot; AMBIGUOUS</span></span><span class="cnt num">4 recs</span><span class="amt num">Rs 2,60,396.00</span></summary><div class="body"><p>2 ledger rows and 2 gateway payments of Rs 1,30,198.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer&#x27;s account. Refused rather than picked.</p><h3>Records named <span class="ok">4</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">ml_000224</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000290</span></td></tr><tr><td class="rid">ml_000225</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000291</span></td></tr><tr><td class="rid">gw_000297</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr><td class="rid">gw_000298</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr></tbody></table></div><h3>Evidence <span class="ok">all 4 shown</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr class="pair"><td colspan="4" class="keys">Pairing 1 &mdash; <span class="pairsum">both sides Rs 1,30,198.00</span></td></tr><tr><td class="rid">ml_000224</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000290</span></td></tr><tr><td class="rid">gw_000297</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr class="pair"><td colspan="4" class="keys">Pairing 2 &mdash; <span class="pairsum">both sides Rs 1,30,198.00</span></td></tr><tr><td class="rid">ml_000224</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000290</span></td></tr><tr><td class="rid">gw_000298</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr class="pair"><td colspan="4" class="keys">Pairing 3 &mdash; <span class="pairsum">both sides Rs 1,30,198.00</span></td></tr><tr><td class="rid">ml_000225</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000291</span></td></tr><tr><td class="rid">gw_000297</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr><tr class="pair"><td colspan="4" class="keys">Pairing 4 &mdash; <span class="pairsum">both sides Rs 1,30,198.00</span></td></tr><tr><td class="rid">ml_000225</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 14:30 IST</span></td><td class="keys"><span>order_ref receipt#000291</span></td></tr><tr><td class="rid">gw_000298</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,30,198.00<br><span class="keys">2026-03-11 15:00 IST</span></td><td class="keys"><span class="keys">no identifying key on this row</span></td></tr></tbody></table></div><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">33</td><td>L3</td><td>raise_exception</td><td>AMBIGUOUS</td><td class="hash">266fff5e1815</td><td class="det">2 ledger rows and 2 gateway payments of Rs 1,30,198.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer&#x27;s account. Refused rather than picked. | evidence 4/4: [ml_000224+gw_000297]=13019800; [ml_000224+gw_000298]=13019800; [ml_000225+gw_000297]=13019800; [ml_000225+gw_000298]=13019800</td></tr></tbody></table></div></div></details><details class="item" id="ex006"><summary><span class="mark" aria-hidden="true"></span><span class="what">Several row subsets close the gap equally well<span class="where">found at layer 2 &middot; AMBIGUOUS</span></span><span class="cnt num">14 recs</span><span class="amt num">Rs 2,47,347.50</span></summary><div class="body"><p>21 distinct subsets of size 2 each close delta Rs 2,47,347.50, so the arithmetic does not determine which rows settled. Refused rather than picking one. 7 pool rows are implicated across the candidate subsets.</p><h3>Records named <span class="ok">14</span></h3><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000187</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 10,313.00<br><span class="keys">2026-03-31 23:58 IST</span></td><td class="keys"><span>order_id order_000187</span><span>settlement_id setl_000022</span><span>settlement_utr 15570013706v6me4</span></td></tr><tr><td class="rid">gw_000188</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,61,289.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000188</span><span>settlement_id setl_000022</span><span>settlement_utr 15570013706v6me4</span></td></tr><tr><td class="rid">gw_000189</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 2,37,766.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000189</span><span>settlement_id setl_000022</span><span>settlement_utr 15570013706v6me4</span></td></tr><tr><td class="rid">bk_000022</td><td>Bank statement<br><span class="keys">credit</span></td><td class="num">Rs 6,50,858.76<br><span class="keys">2026-03-09 IST</span></td><td class="keys"><span>reference 15570013706v6me4</span><span>narration NEFT-RAZORPAYSOFTWARE-UTR15570013706v6me4-STL</span></td></tr><tr><td class="rid">ml_000132</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 10,313.00<br><span class="keys">2026-03-31 23:58 IST</span></td><td class="keys"><span>order_ref receipt#000187</span><span>gateway_order_id order_000187</span><span>customer_ref cust_000132</span></td></tr><tr><td class="rid">ml_000133</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 1,61,289.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000188</span><span>gateway_order_id order_000188</span><span>customer_ref cust_000133</span></td></tr><tr><td class="rid">ml_000134</td><td>Merchant ledger<br><span class="keys">order</span></td><td class="num">Rs 2,37,766.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_ref receipt#000189</span><span>gateway_order_id order_000189</span><span>customer_ref cust_000134</span></td></tr><tr><td class="rid">gw_000190</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000190</span></td></tr><tr><td class="rid">gw_000191</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000191</span></td></tr><tr><td class="rid">gw_000192</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000192</span></td></tr><tr><td class="rid">gw_000193</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000193</span></td></tr><tr><td class="rid">gw_000194</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000194</span></td></tr><tr><td class="rid">gw_000195</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000195</span></td></tr><tr><td class="rid">gw_000196</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000196</span></td></tr></tbody></table></div><h3>Evidence <span class="flag">showing 5 of 21 &mdash; truncated</span></h3><p class="subset"><span class="eq">Subset 1 of 21:</span> <span class="ids">gw_000190 + gw_000191</span> <span class="eq">=</span> <span class="pairsum">Rs 2,47,347.50</span></p><p class="subset"><span class="eq">Subset 2 of 21:</span> <span class="ids">gw_000190 + gw_000192</span> <span class="eq">=</span> <span class="pairsum">Rs 2,47,347.50</span></p><p class="subset"><span class="eq">Subset 3 of 21:</span> <span class="ids">gw_000190 + gw_000193</span> <span class="eq">=</span> <span class="pairsum">Rs 2,47,347.50</span></p><p class="subset"><span class="eq">Subset 4 of 21:</span> <span class="ids">gw_000190 + gw_000194</span> <span class="eq">=</span> <span class="pairsum">Rs 2,47,347.50</span></p><p class="subset"><span class="eq">Subset 5 of 21:</span> <span class="ids">gw_000190 + gw_000195</span> <span class="eq">=</span> <span class="pairsum">Rs 2,47,347.50</span></p><div class="ev-wrap"><table class="ev"><thead><tr><th>Record</th><th>Source</th><th class="num">Amount</th><th>Keys</th></tr></thead><tbody><tr><td class="rid">gw_000190</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000190</span></td></tr><tr><td class="rid">gw_000191</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000191</span></td></tr><tr><td class="rid">gw_000192</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000192</span></td></tr><tr><td class="rid">gw_000193</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000193</span></td></tr><tr><td class="rid">gw_000194</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000194</span></td></tr><tr><td class="rid">gw_000195</td><td>Gateway<br><span class="keys">payment</span></td><td class="num">Rs 1,26,663.00<br><span class="keys">2026-03-04 12:00 IST</span></td><td class="keys"><span>order_id order_000195</span></td></tr></tbody></table></div><h3>Audit trail <span class="ok">hash-chained, replayable</span></h3><div class="trail-wrap"><table class="trail"><thead><tr><th class="num">#</th><th>Layer</th><th>Decision</th><th>Outcome</th><th>Entry hash</th><th>Detail</th></tr></thead><tbody><tr><td class="num">31</td><td>L2</td><td>raise_exception</td><td>AMBIGUOUS</td><td class="hash">56b09d97b296</td><td class="det">21 distinct subsets of size 2 each close delta Rs 2,47,347.50, so the arithmetic does not determine which rows settled. Refused rather than picking one. 7 pool rows are implicated across the candidate subsets. | evidence 5/21 (truncated): [gw_000190+gw_000191]=24734750; [gw_000190+gw_000192]=24734750; [gw_000190+gw_000193]=24734750; [gw_000190+gw_000194]=24734750; [gw_000190+gw_000195]=24734750</td></tr></tbody></table></div></div></details></div>
+  <p class="note">Declining is a success where the data does not determine an answer. Of these records, 56 have no counterpart in the data at all and 38 have one that cannot be identified. Every refusal above carries the evidence it was refused on.</p>
 
-  <h2>Full metrics block, as printed by <code>make eval</code></h2>
-  <pre>Dataset: dev_seed_11  data 1115450f   SHA: 1e0b9b7   2026-08-27 13:48
+  <h2>The numbers, as the harness prints them</h2>
+  <details class="raw">
+    <summary>Full metrics block</summary>
+    <pre>Dataset: dev_seed_11  data 1115450f   SHA: 2bc161f   2026-08-27 14:34
 Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
   ^ counts THIS RUN&#x27;s responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.
-Records processed         558          Wall clock    0.263s
-Auto-matched              425    76.2%   Throughput   2122 rec/s
+Records processed         558          Wall clock    0.269s
+Auto-matched              425    76.2%   Throughput   2071 rec/s
   Layer 1  exact            325    58.2%
   Layer 2  netting           73    13.1%
   Layer 3  fuzzy              0     0.0%
@@ -107,9 +430,10 @@ Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose 
 By pathology  (records carry &gt;=1, so these OVERLAP and do not sum to 558)
   P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24
   P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14</pre>
-
-  <h2>Ablation — each arm is a real run on the same dataset</h2>
-  <pre>
+  </details>
+  <details class="raw">
+    <summary>Ablation &mdash; each arm is a real run on the same dataset</summary>
+    <pre>
 Ablation (same dataset, layers enabled cumulatively)
   arm                  auto-match   false-match   exceptions   UNCLASSIFIED
   exact only (L1)          58.2%         0.00%          233             94
@@ -118,14 +442,18 @@ Ablation (same dataset, layers enabled cumulatively)
   + LLM (L4)               76.2%         0.00%          133              0   +4.8pp
   False-match rate is reported on every arm: an arm that raises coverage while also
   raising false matches is a regression being sold as an improvement.</pre>
+  </details>
 
-  <p class="note">Provenance match; adjudicator offline_stub (replay mode). Adjudication responses in this run came from an offline stub, not a model — see docs/METRICS.md. This page has data inlined and makes no network requests.</p>
+  <footer>558 records reconciled in 269 ms. Money is integer paise throughout and is formatted to rupees only at this boundary. No script runs on this page and it makes no network requests.</footer>
 </main>
+<!-- Every number above is also here as JSON, so the page is machine-readable without scraping
+     the markup. Nothing on this page executes: there is no script, no fetch, and no external
+     reference of any kind. -->
 <script id="run-data" type="application/json">{
   "ablation": "\nAblation (same dataset, layers enabled cumulatively)\n  arm                  auto-match   false-match   exceptions   UNCLASSIFIED\n  exact only (L1)          58.2%         0.00%          233             94\n  + netting (L2)           71.3%         0.00%          160              4   +13.1pp\n  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp\n  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp\n  False-match rate is reported on every arm: an arm that raises coverage while also\n  raising false matches is a regression being sold as an improvement.",
   "at_risk_paise": 1146129974,
   "auto_matched": 425,
-  "block": "Dataset: dev_seed_11  data 1115450f   SHA: 1e0b9b7   2026-08-27 13:48\nAdjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)\n  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.\nRecords processed         558          Wall clock    0.263s\nAuto-matched              425    76.2%   Throughput   2122 rec/s\n  Layer 1  exact            325    58.2%\n  Layer 2  netting           73    13.1%\n  Layer 3  fuzzy              0     0.0%\n  Layer 4  LLM+verified      27     4.8%\nFalse matches               0    0.00%   <- precision, not coverage\nExceptions                133    23.8%    Rs 1,14,61,299.74 at risk\n  correctly flagged        94    70.7%\n  missed matches           39    29.3%\n  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1\n  by class: absent 56, undetermined 38\nLLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 responses from cache)\n  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold rate. The last cold attempt was terminated by provider quota exhaustion; see docs/METRICS.md.\n  by kind: none (all replayed from fixtures)   MODE=replay\nRules cache                 3 rules   2 promoted from narration the seeded regex missed\n  authored by: google-gemini/gemini-3.7-flash x1, offline_stub/gemini-3.7-flash x1\nAdjudication             0.0s   retries 0   backoff     0s   (1% of wall clock)\nCost / 1000            Rs TBD          USD 0.000000 total\nAudit ledger               42 entries   head 51b54deedc60\nBy mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)\n  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1\n  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0\n  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0\n  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0\nRefusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.\n  P7 record-level tie            8/8    records   100.0%\n  M5 batch subset ambiguity      2/2    batches   100.0%\nBy pathology  (records carry >=1, so these OVERLAP and do not sum to 558)\n  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24\n  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14",
+  "block": "Dataset: dev_seed_11  data 1115450f   SHA: 2bc161f   2026-08-27 14:34\nAdjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)\n  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.\nRecords processed         558          Wall clock    0.269s\nAuto-matched              425    76.2%   Throughput   2071 rec/s\n  Layer 1  exact            325    58.2%\n  Layer 2  netting           73    13.1%\n  Layer 3  fuzzy              0     0.0%\n  Layer 4  LLM+verified      27     4.8%\nFalse matches               0    0.00%   <- precision, not coverage\nExceptions                133    23.8%    Rs 1,14,61,299.74 at risk\n  correctly flagged        94    70.7%\n  missed matches           39    29.3%\n  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1\n  by class: absent 56, undetermined 38\nLLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 responses from cache)\n  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold rate. The last cold attempt was terminated by provider quota exhaustion; see docs/METRICS.md.\n  by kind: none (all replayed from fixtures)   MODE=replay\nRules cache                 3 rules   2 promoted from narration the seeded regex missed\n  authored by: google-gemini/gemini-3.7-flash x1, offline_stub/gemini-3.7-flash x1\nAdjudication             0.0s   retries 0   backoff     0s   (1% of wall clock)\nCost / 1000            Rs TBD          USD 0.000000 total\nAudit ledger               42 entries   head 51b54deedc60\nBy mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)\n  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1\n  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0\n  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0\n  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0\nRefusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.\n  P7 record-level tie            8/8    records   100.0%\n  M5 batch subset ambiguity      2/2    batches   100.0%\nBy pathology  (records carry >=1, so these OVERLAP and do not sum to 558)\n  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24\n  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14",
   "by_class": {
     "absent": 56,
     "undetermined": 38
@@ -185,6 +513,698 @@ Ablation (same dataset, layers enabled cumulatively)
   },
   "correctly_flagged": 94,
   "dataset": "dev_seed_11",
+  "entering": {
+    "1": 558,
+    "2": 233,
+    "3": 160,
+    "4": 160
+  },
+  "exception_items": [
+    {
+      "amount_at_risk_paise": 411156315,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "44 gateway rows carry no settlement assignment, and no in-period batch needed them. Their settlement falls outside the period this export covers - pending writeback, not a reconciliation failure.",
+          "entry_hash": "bfec27888b38",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "TIMING_OUTSIDE_WINDOW",
+          "provider": "offline_stub",
+          "seq": 39
+        }
+      ],
+      "detail": "44 gateway rows carry no settlement assignment, and no in-period batch needed them. Their settlement falls outside the period this export covers - pending writeback, not a reconciliation failure.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex012",
+      "layer": 4,
+      "record_ids": [
+        "gw_000022",
+        "gw_000025",
+        "gw_000026",
+        "gw_000028",
+        "gw_000030",
+        "gw_000033",
+        "gw_000034",
+        "gw_000035",
+        "gw_000036",
+        "gw_000037",
+        "gw_000039",
+        "gw_000040",
+        "gw_000042",
+        "gw_000043",
+        "gw_000044",
+        "gw_000045",
+        "gw_000046",
+        "gw_000047",
+        "gw_000048",
+        "gw_000049",
+        "gw_000050",
+        "gw_000051",
+        "gw_000052",
+        "gw_000053",
+        "gw_000054",
+        "gw_000055",
+        "gw_000056",
+        "gw_000057",
+        "gw_000058",
+        "gw_000059",
+        "gw_000148",
+        "gw_000149",
+        "gw_000150",
+        "gw_000151",
+        "gw_000152",
+        "gw_000288",
+        "gw_000289",
+        "gw_000290",
+        "gw_000291",
+        "gw_000292",
+        "gw_000293",
+        "gw_000294",
+        "gw_000299",
+        "gw_000300"
+      ],
+      "type": "TIMING_OUTSIDE_WINDOW"
+    },
+    {
+      "amount_at_risk_paise": 132893704,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "search hit its nodes bound at subset size 8 after 200001 nodes over 62 candidates, with 0 subsets found so far - a lower bound, not a total. Neither a match nor an ambiguity can be claimed from an incomplete search.",
+          "entry_hash": "bcead4d07560",
+          "layer": 2,
+          "model": null,
+          "outcome": "SUBSET_SEARCH_EXHAUSTED",
+          "provider": null,
+          "seq": 38
+        }
+      ],
+      "detail": "search hit its nodes bound at subset size 8 after 200001 nodes over 62 candidates, with 0 subsets found so far - a lower bound, not a total. Neither a match nor an ambiguity can be claimed from an incomplete search.",
+      "evidence": [],
+      "evidence_complete": false,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex004",
+      "layer": 2,
+      "record_ids": [
+        "gw_000015",
+        "gw_000016",
+        "gw_000017",
+        "gw_000018",
+        "gw_000019",
+        "gw_000020",
+        "bk_000003",
+        "ml_000015",
+        "ml_000016",
+        "ml_000017",
+        "ml_000018",
+        "ml_000019",
+        "ml_000020"
+      ],
+      "type": "SUBSET_SEARCH_EXHAUSTED"
+    },
+    {
+      "amount_at_risk_paise": 86904639,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000028 settled with UTR 1585862611g2e9cy but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+          "entry_hash": "924b13fc01d0",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_BANK_ROW",
+          "provider": null,
+          "seq": 36
+        },
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000028 settled with UTR 1585862611g2e9cy and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+          "entry_hash": "51b54deedc60",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "UNPARSEABLE_NARRATION",
+          "provider": "offline_stub",
+          "seq": 42
+        }
+      ],
+      "detail": "setl_000028 settled with UTR 1585862611g2e9cy but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex002",
+      "layer": 1,
+      "record_ids": [
+        "gw_000233",
+        "gw_000234",
+        "gw_000235",
+        "gw_000236",
+        "gw_000237",
+        "gw_000238",
+        "ml_000171",
+        "ml_000172",
+        "ml_000173",
+        "ml_000174",
+        "ml_000175",
+        "ml_000176"
+      ],
+      "type": "MISSING_BANK_ROW"
+    },
+    {
+      "amount_at_risk_paise": 86904639,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000028 settled with UTR 1585862611g2e9cy but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+          "entry_hash": "924b13fc01d0",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_BANK_ROW",
+          "provider": null,
+          "seq": 36
+        },
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000028 settled with UTR 1585862611g2e9cy and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+          "entry_hash": "51b54deedc60",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "UNPARSEABLE_NARRATION",
+          "provider": "offline_stub",
+          "seq": 42
+        }
+      ],
+      "detail": "setl_000028 settled with UTR 1585862611g2e9cy and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex011",
+      "layer": 4,
+      "record_ids": [
+        "gw_000233",
+        "gw_000234",
+        "gw_000235",
+        "gw_000236",
+        "gw_000237",
+        "gw_000238",
+        "ml_000171",
+        "ml_000172",
+        "ml_000173",
+        "ml_000174",
+        "ml_000175",
+        "ml_000176"
+      ],
+      "type": "UNPARSEABLE_NARRATION"
+    },
+    {
+      "amount_at_risk_paise": 78199779,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000023 settled with UTR 1675464054gdi3eg but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+          "entry_hash": "4389f90d9cfa",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_BANK_ROW",
+          "provider": null,
+          "seq": 34
+        },
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000023 settled with UTR 1675464054gdi3eg and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+          "entry_hash": "09695c3a259a",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "UNPARSEABLE_NARRATION",
+          "provider": "offline_stub",
+          "seq": 40
+        }
+      ],
+      "detail": "setl_000023 settled with UTR 1675464054gdi3eg but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex000",
+      "layer": 1,
+      "record_ids": [
+        "gw_000197",
+        "gw_000198",
+        "gw_000199",
+        "gw_000200",
+        "gw_000201",
+        "gw_000202",
+        "ml_000135",
+        "ml_000136",
+        "ml_000137",
+        "ml_000138",
+        "ml_000139",
+        "ml_000140"
+      ],
+      "type": "MISSING_BANK_ROW"
+    },
+    {
+      "amount_at_risk_paise": 78199779,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000023 settled with UTR 1675464054gdi3eg but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+          "entry_hash": "4389f90d9cfa",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_BANK_ROW",
+          "provider": null,
+          "seq": 34
+        },
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000023 settled with UTR 1675464054gdi3eg and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+          "entry_hash": "09695c3a259a",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "UNPARSEABLE_NARRATION",
+          "provider": "offline_stub",
+          "seq": 40
+        }
+      ],
+      "detail": "setl_000023 settled with UTR 1675464054gdi3eg and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex009",
+      "layer": 4,
+      "record_ids": [
+        "gw_000197",
+        "gw_000198",
+        "gw_000199",
+        "gw_000200",
+        "gw_000201",
+        "gw_000202",
+        "ml_000135",
+        "ml_000136",
+        "ml_000137",
+        "ml_000138",
+        "ml_000139",
+        "ml_000140"
+      ],
+      "type": "UNPARSEABLE_NARRATION"
+    },
+    {
+      "amount_at_risk_paise": 51707899,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000024 settled with UTR 182473832603xxzm but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+          "entry_hash": "ad9d2411bd65",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_BANK_ROW",
+          "provider": null,
+          "seq": 35
+        },
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000024 settled with UTR 182473832603xxzm and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+          "entry_hash": "e49cc48ab4e4",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "UNPARSEABLE_NARRATION",
+          "provider": "offline_stub",
+          "seq": 41
+        }
+      ],
+      "detail": "setl_000024 settled with UTR 182473832603xxzm but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex001",
+      "layer": 1,
+      "record_ids": [
+        "gw_000203",
+        "gw_000204",
+        "gw_000205",
+        "gw_000206",
+        "ml_000141",
+        "ml_000142",
+        "ml_000143",
+        "ml_000144"
+      ],
+      "type": "MISSING_BANK_ROW"
+    },
+    {
+      "amount_at_risk_paise": 51707899,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "bank credit bk_000023 carries reference (none) which matches no settlement. Narration: 'NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT'",
+          "entry_hash": "51aefd4fcab6",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_GATEWAY_ROW",
+          "provider": null,
+          "seq": 37
+        }
+      ],
+      "detail": "bank credit bk_000023 carries reference (none) which matches no settlement. Narration: 'NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT'",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex003",
+      "layer": 1,
+      "record_ids": [
+        "bk_000023"
+      ],
+      "type": "MISSING_GATEWAY_ROW"
+    },
+    {
+      "amount_at_risk_paise": 51707899,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000024 settled with UTR 182473832603xxzm but no bank credit carries that reference. Absence, not mismatch: there is no scalar to reconstruct against, so no search is attempted.",
+          "entry_hash": "ad9d2411bd65",
+          "layer": 1,
+          "model": null,
+          "outcome": "MISSING_BANK_ROW",
+          "provider": null,
+          "seq": 35
+        },
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "setl_000024 settled with UTR 182473832603xxzm and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+          "entry_hash": "e49cc48ab4e4",
+          "layer": 4,
+          "model": "gemini-3.7-flash",
+          "outcome": "UNPARSEABLE_NARRATION",
+          "provider": "offline_stub",
+          "seq": 41
+        }
+      ],
+      "detail": "setl_000024 settled with UTR 182473832603xxzm and no bank credit carries that reference in either its reference column or a parseable narration. A credit with unreadable narration is present in this statement, so this may be a formatting problem rather than a feed gap - a human should read the narration.",
+      "evidence": [],
+      "evidence_complete": true,
+      "evidence_found": 0,
+      "evidence_truncated": false,
+      "id": "ex010",
+      "layer": 4,
+      "record_ids": [
+        "gw_000203",
+        "gw_000204",
+        "gw_000205",
+        "gw_000206",
+        "ml_000141",
+        "ml_000142",
+        "ml_000143",
+        "ml_000144"
+      ],
+      "type": "UNPARSEABLE_NARRATION"
+    },
+    {
+      "amount_at_risk_paise": 36543400,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "2 ledger rows and 2 gateway payments of Rs 1,82,717.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer's account. Refused rather than picked. | evidence 4/4: [ml_000222+gw_000295]=18271700; [ml_000222+gw_000296]=18271700; [ml_000223+gw_000295]=18271700; [ml_000223+gw_000296]=18271700",
+          "entry_hash": "4a73b5ad5f1f",
+          "layer": 3,
+          "model": null,
+          "outcome": "AMBIGUOUS",
+          "provider": null,
+          "seq": 32
+        }
+      ],
+      "detail": "2 ledger rows and 2 gateway payments of Rs 1,82,717.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer's account. Refused rather than picked.",
+      "evidence": [
+        {
+          "row_ids": [
+            "ml_000222",
+            "gw_000295"
+          ],
+          "sum_paise": 18271700
+        },
+        {
+          "row_ids": [
+            "ml_000222",
+            "gw_000296"
+          ],
+          "sum_paise": 18271700
+        },
+        {
+          "row_ids": [
+            "ml_000223",
+            "gw_000295"
+          ],
+          "sum_paise": 18271700
+        },
+        {
+          "row_ids": [
+            "ml_000223",
+            "gw_000296"
+          ],
+          "sum_paise": 18271700
+        }
+      ],
+      "evidence_complete": true,
+      "evidence_found": 4,
+      "evidence_truncated": false,
+      "id": "ex007",
+      "layer": 3,
+      "record_ids": [
+        "ml_000222",
+        "ml_000223",
+        "gw_000295",
+        "gw_000296"
+      ],
+      "type": "AMBIGUOUS"
+    },
+    {
+      "amount_at_risk_paise": 29429672,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "2 distinct subsets of size 5 each close delta Rs 2,94,296.72, so the arithmetic does not determine which rows settled. Refused rather than picking one. 10 pool rows are implicated across the candidate subsets. | evidence 2/2: [gw_000060+gw_000024+gw_000041+gw_000032+gw_000029]=29429672; [gw_000031+gw_000021+gw_000023+gw_000027+gw_000038]=29429672",
+          "entry_hash": "05b91a01365f",
+          "layer": 2,
+          "model": null,
+          "outcome": "AMBIGUOUS",
+          "provider": null,
+          "seq": 30
+        }
+      ],
+      "detail": "2 distinct subsets of size 5 each close delta Rs 2,94,296.72, so the arithmetic does not determine which rows settled. Refused rather than picking one. 10 pool rows are implicated across the candidate subsets.",
+      "evidence": [
+        {
+          "row_ids": [
+            "gw_000060",
+            "gw_000024",
+            "gw_000041",
+            "gw_000032",
+            "gw_000029"
+          ],
+          "sum_paise": 29429672
+        },
+        {
+          "row_ids": [
+            "gw_000031",
+            "gw_000021",
+            "gw_000023",
+            "gw_000027",
+            "gw_000038"
+          ],
+          "sum_paise": 29429672
+        }
+      ],
+      "evidence_complete": true,
+      "evidence_found": 2,
+      "evidence_truncated": false,
+      "id": "ex005",
+      "layer": 2,
+      "record_ids": [
+        "gw_000143",
+        "gw_000144",
+        "gw_000145",
+        "gw_000146",
+        "gw_000147",
+        "bk_000015",
+        "ml_000093",
+        "ml_000094",
+        "ml_000095",
+        "ml_000096",
+        "ml_000097",
+        "gw_000021",
+        "gw_000023",
+        "gw_000024",
+        "gw_000027",
+        "gw_000029",
+        "gw_000031",
+        "gw_000032",
+        "gw_000038",
+        "gw_000041",
+        "gw_000060"
+      ],
+      "type": "AMBIGUOUS"
+    },
+    {
+      "amount_at_risk_paise": 26039600,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "2 ledger rows and 2 gateway payments of Rs 1,30,198.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer's account. Refused rather than picked. | evidence 4/4: [ml_000224+gw_000297]=13019800; [ml_000224+gw_000298]=13019800; [ml_000225+gw_000297]=13019800; [ml_000225+gw_000298]=13019800",
+          "entry_hash": "266fff5e1815",
+          "layer": 3,
+          "model": null,
+          "outcome": "AMBIGUOUS",
+          "provider": null,
+          "seq": 33
+        }
+      ],
+      "detail": "2 ledger rows and 2 gateway payments of Rs 1,30,198.00 are mutually interchangeable: every candidate pairing is equally optimal, so nothing in the data says which payment belongs to which order. The money reconciles either way; the attribution does not, and attributing a payment to the wrong customer is a wrong statement about that customer's account. Refused rather than picked.",
+      "evidence": [
+        {
+          "row_ids": [
+            "ml_000224",
+            "gw_000297"
+          ],
+          "sum_paise": 13019800
+        },
+        {
+          "row_ids": [
+            "ml_000224",
+            "gw_000298"
+          ],
+          "sum_paise": 13019800
+        },
+        {
+          "row_ids": [
+            "ml_000225",
+            "gw_000297"
+          ],
+          "sum_paise": 13019800
+        },
+        {
+          "row_ids": [
+            "ml_000225",
+            "gw_000298"
+          ],
+          "sum_paise": 13019800
+        }
+      ],
+      "evidence_complete": true,
+      "evidence_found": 4,
+      "evidence_truncated": false,
+      "id": "ex008",
+      "layer": 3,
+      "record_ids": [
+        "ml_000224",
+        "ml_000225",
+        "gw_000297",
+        "gw_000298"
+      ],
+      "type": "AMBIGUOUS"
+    },
+    {
+      "amount_at_risk_paise": 24734750,
+      "audit_trail": [
+        {
+          "confidence": 100,
+          "decision": "raise_exception",
+          "detail": "21 distinct subsets of size 2 each close delta Rs 2,47,347.50, so the arithmetic does not determine which rows settled. Refused rather than picking one. 7 pool rows are implicated across the candidate subsets. | evidence 5/21 (truncated): [gw_000190+gw_000191]=24734750; [gw_000190+gw_000192]=24734750; [gw_000190+gw_000193]=24734750; [gw_000190+gw_000194]=24734750; [gw_000190+gw_000195]=24734750",
+          "entry_hash": "56b09d97b296",
+          "layer": 2,
+          "model": null,
+          "outcome": "AMBIGUOUS",
+          "provider": null,
+          "seq": 31
+        }
+      ],
+      "detail": "21 distinct subsets of size 2 each close delta Rs 2,47,347.50, so the arithmetic does not determine which rows settled. Refused rather than picking one. 7 pool rows are implicated across the candidate subsets.",
+      "evidence": [
+        {
+          "row_ids": [
+            "gw_000190",
+            "gw_000191"
+          ],
+          "sum_paise": 24734750
+        },
+        {
+          "row_ids": [
+            "gw_000190",
+            "gw_000192"
+          ],
+          "sum_paise": 24734750
+        },
+        {
+          "row_ids": [
+            "gw_000190",
+            "gw_000193"
+          ],
+          "sum_paise": 24734750
+        },
+        {
+          "row_ids": [
+            "gw_000190",
+            "gw_000194"
+          ],
+          "sum_paise": 24734750
+        },
+        {
+          "row_ids": [
+            "gw_000190",
+            "gw_000195"
+          ],
+          "sum_paise": 24734750
+        }
+      ],
+      "evidence_complete": true,
+      "evidence_found": 21,
+      "evidence_truncated": true,
+      "id": "ex006",
+      "layer": 2,
+      "record_ids": [
+        "gw_000187",
+        "gw_000188",
+        "gw_000189",
+        "bk_000022",
+        "ml_000132",
+        "ml_000133",
+        "ml_000134",
+        "gw_000190",
+        "gw_000191",
+        "gw_000192",
+        "gw_000193",
+        "gw_000194",
+        "gw_000195",
+        "gw_000196"
+      ],
+      "type": "AMBIGUOUS"
+    }
+  ],
   "exceptions": 133,
   "false_matches": 0,
   "ledger": {
@@ -267,10 +1287,1790 @@ Ablation (same dataset, layers enabled cumulatively)
   },
   "provenance": {
     "dataset_sha": "1115450f",
-    "git_sha": "1e0b9b7",
+    "git_sha": "2bc161f",
     "manifest_state": "match",
-    "started_at_utc": "2026-08-27 13:48",
+    "started_at_utc": "2026-08-27 14:34",
     "trustworthy": true
+  },
+  "record_digest": {
+    "bk_000003": {
+      "amount_paise": 171918850,
+      "keys": {
+        "narration": "NEFT-RAZORPAYSOFTWARE-UTR1749612677hipgad-STL",
+        "reference": "1749612677hipgad"
+      },
+      "kind": "credit",
+      "source": "bank",
+      "value_date_ist": "2026-03-27"
+    },
+    "bk_000015": {
+      "amount_paise": 109539289,
+      "keys": {
+        "narration": "NEFT-RAZORPAYSOFTWARE-UTR1637714577s9k769-STL",
+        "reference": "1637714577s9k769"
+      },
+      "kind": "credit",
+      "source": "bank",
+      "value_date_ist": "2026-03-26"
+    },
+    "bk_000022": {
+      "amount_paise": 65085876,
+      "keys": {
+        "narration": "NEFT-RAZORPAYSOFTWARE-UTR15570013706v6me4-STL",
+        "reference": "15570013706v6me4"
+      },
+      "kind": "credit",
+      "source": "bank",
+      "value_date_ist": "2026-03-09"
+    },
+    "bk_000023": {
+      "amount_paise": 51707899,
+      "keys": {
+        "narration": "NEFT CR-RAZORPAY SOFTWARE-SETTLEMENT",
+        "reference": ""
+      },
+      "kind": "credit",
+      "source": "bank",
+      "value_date_ist": "2026-03-10"
+    },
+    "gw_000015": {
+      "amount_paise": 4707700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000015",
+        "payment_id": null,
+        "settlement_id": "setl_000003",
+        "settlement_utr": "1749612677hipgad"
+      },
+      "kind": "payment",
+      "net_paise": 4596598,
+      "source": "gateway"
+    },
+    "gw_000016": {
+      "amount_paise": 4988400,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000016",
+        "payment_id": null,
+        "settlement_id": "setl_000003",
+        "settlement_utr": "1749612677hipgad"
+      },
+      "kind": "payment",
+      "net_paise": 4870674,
+      "source": "gateway"
+    },
+    "gw_000017": {
+      "amount_paise": 5048600,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000017",
+        "payment_id": null,
+        "settlement_id": "setl_000003",
+        "settlement_utr": "1749612677hipgad"
+      },
+      "kind": "payment",
+      "net_paise": 4929453,
+      "source": "gateway"
+    },
+    "gw_000018": {
+      "amount_paise": 11039800,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000018",
+        "payment_id": null,
+        "settlement_id": "setl_000003",
+        "settlement_utr": "1749612677hipgad"
+      },
+      "kind": "payment",
+      "net_paise": 10779261,
+      "source": "gateway"
+    },
+    "gw_000019": {
+      "amount_paise": 3104100,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000019",
+        "payment_id": null,
+        "settlement_id": "setl_000003",
+        "settlement_utr": "1749612677hipgad"
+      },
+      "kind": "payment",
+      "net_paise": 3030843,
+      "source": "gateway"
+    },
+    "gw_000020": {
+      "amount_paise": 11079800,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000020",
+        "payment_id": null,
+        "settlement_id": "setl_000003",
+        "settlement_utr": "1749612677hipgad"
+      },
+      "kind": "payment",
+      "net_paise": 10818317,
+      "source": "gateway"
+    },
+    "gw_000021": {
+      "amount_paise": 7122500,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000021",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 6954409,
+      "source": "gateway"
+    },
+    "gw_000022": {
+      "amount_paise": 8022900,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000022",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 7833560,
+      "source": "gateway"
+    },
+    "gw_000023": {
+      "amount_paise": 5573600,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000023",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 5442063,
+      "source": "gateway"
+    },
+    "gw_000024": {
+      "amount_paise": 10385600,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000024",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 10140500,
+      "source": "gateway"
+    },
+    "gw_000025": {
+      "amount_paise": 16875300,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000025",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 16477043,
+      "source": "gateway"
+    },
+    "gw_000026": {
+      "amount_paise": 2680100,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000026",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 2616850,
+      "source": "gateway"
+    },
+    "gw_000027": {
+      "amount_paise": 3886700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000027",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 3794974,
+      "source": "gateway"
+    },
+    "gw_000028": {
+      "amount_paise": 11624700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000028",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 11350357,
+      "source": "gateway"
+    },
+    "gw_000029": {
+      "amount_paise": 301000,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000029",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 293896,
+      "source": "gateway"
+    },
+    "gw_000030": {
+      "amount_paise": 8673300,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000030",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 8468610,
+      "source": "gateway"
+    },
+    "gw_000031": {
+      "amount_paise": 10173200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000031",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 9933112,
+      "source": "gateway"
+    },
+    "gw_000032": {
+      "amount_paise": 1997200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000032",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 1950066,
+      "source": "gateway"
+    },
+    "gw_000033": {
+      "amount_paise": 5521800,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000033",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 5391486,
+      "source": "gateway"
+    },
+    "gw_000034": {
+      "amount_paise": 16737700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000034",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 16342690,
+      "source": "gateway"
+    },
+    "gw_000035": {
+      "amount_paise": 456500,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000035",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 445727,
+      "source": "gateway"
+    },
+    "gw_000036": {
+      "amount_paise": 9714500,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000036",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 9485238,
+      "source": "gateway"
+    },
+    "gw_000037": {
+      "amount_paise": 16359200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000037",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 15973123,
+      "source": "gateway"
+    },
+    "gw_000038": {
+      "amount_paise": 3385000,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000038",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 3305114,
+      "source": "gateway"
+    },
+    "gw_000039": {
+      "amount_paise": 12730500,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000039",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12430060,
+      "source": "gateway"
+    },
+    "gw_000040": {
+      "amount_paise": 3608200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000040",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 3523046,
+      "source": "gateway"
+    },
+    "gw_000041": {
+      "amount_paise": 4842700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000041",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 4728412,
+      "source": "gateway"
+    },
+    "gw_000042": {
+      "amount_paise": 8197700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000042",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 8004234,
+      "source": "gateway"
+    },
+    "gw_000043": {
+      "amount_paise": 21488100,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000043",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 20980981,
+      "source": "gateway"
+    },
+    "gw_000044": {
+      "amount_paise": 6590400,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000044",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 6434867,
+      "source": "gateway"
+    },
+    "gw_000045": {
+      "amount_paise": 4204300,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000045",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 4105079,
+      "source": "gateway"
+    },
+    "gw_000046": {
+      "amount_paise": 5203400,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000046",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 5080600,
+      "source": "gateway"
+    },
+    "gw_000047": {
+      "amount_paise": 23176000,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000047",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 22629046,
+      "source": "gateway"
+    },
+    "gw_000048": {
+      "amount_paise": 15871200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000048",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 15496640,
+      "source": "gateway"
+    },
+    "gw_000049": {
+      "amount_paise": 11098200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000049",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 10836282,
+      "source": "gateway"
+    },
+    "gw_000050": {
+      "amount_paise": 2772000,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000050",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 2706581,
+      "source": "gateway"
+    },
+    "gw_000051": {
+      "amount_paise": 1064400,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000051",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 1039280,
+      "source": "gateway"
+    },
+    "gw_000052": {
+      "amount_paise": 6739300,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000052",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 6580253,
+      "source": "gateway"
+    },
+    "gw_000053": {
+      "amount_paise": 19444100,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000053",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 18985219,
+      "source": "gateway"
+    },
+    "gw_000054": {
+      "amount_paise": 6786600,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000054",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 6626436,
+      "source": "gateway"
+    },
+    "gw_000055": {
+      "amount_paise": 21643200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000055",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 21132420,
+      "source": "gateway"
+    },
+    "gw_000056": {
+      "amount_paise": 12921200,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000056",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12616260,
+      "source": "gateway"
+    },
+    "gw_000057": {
+      "amount_paise": 13683400,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000057",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 13360472,
+      "source": "gateway"
+    },
+    "gw_000058": {
+      "amount_paise": 24409300,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000058",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 23833241,
+      "source": "gateway"
+    },
+    "gw_000059": {
+      "amount_paise": 3363500,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000059",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 3284121,
+      "source": "gateway"
+    },
+    "gw_000060": {
+      "amount_paise": 12614500,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000060",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12316798,
+      "source": "gateway"
+    },
+    "gw_000143": {
+      "amount_paise": 17647600,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000143",
+        "payment_id": null,
+        "settlement_id": "setl_000015",
+        "settlement_utr": "1637714577s9k769"
+      },
+      "kind": "payment",
+      "net_paise": 17231117,
+      "source": "gateway"
+    },
+    "gw_000144": {
+      "amount_paise": 22207900,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000144",
+        "payment_id": null,
+        "settlement_id": "setl_000015",
+        "settlement_utr": "1637714577s9k769"
+      },
+      "kind": "payment",
+      "net_paise": 21683794,
+      "source": "gateway"
+    },
+    "gw_000145": {
+      "amount_paise": 5508800,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000145",
+        "payment_id": null,
+        "settlement_id": "setl_000015",
+        "settlement_utr": "1637714577s9k769"
+      },
+      "kind": "payment",
+      "net_paise": 5378792,
+      "source": "gateway"
+    },
+    "gw_000146": {
+      "amount_paise": 22352400,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000146",
+        "payment_id": null,
+        "settlement_id": "setl_000015",
+        "settlement_utr": "1637714577s9k769"
+      },
+      "kind": "payment",
+      "net_paise": 21824883,
+      "source": "gateway"
+    },
+    "gw_000147": {
+      "amount_paise": 14329200,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000147",
+        "payment_id": null,
+        "settlement_id": "setl_000015",
+        "settlement_utr": "1637714577s9k769"
+      },
+      "kind": "payment",
+      "net_paise": 13991031,
+      "source": "gateway"
+    },
+    "gw_000148": {
+      "amount_paise": 15070500,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000148",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 14714836,
+      "source": "gateway"
+    },
+    "gw_000149": {
+      "amount_paise": 15070500,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000149",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 14714836,
+      "source": "gateway"
+    },
+    "gw_000150": {
+      "amount_paise": 15070500,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000150",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 14714836,
+      "source": "gateway"
+    },
+    "gw_000151": {
+      "amount_paise": 15070500,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000151",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 14714836,
+      "source": "gateway"
+    },
+    "gw_000152": {
+      "amount_paise": 15070500,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000152",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 14714836,
+      "source": "gateway"
+    },
+    "gw_000187": {
+      "amount_paise": 1031300,
+      "at_utc": 1774981680,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000187",
+        "payment_id": null,
+        "settlement_id": "setl_000022",
+        "settlement_utr": "15570013706v6me4"
+      },
+      "kind": "payment",
+      "net_paise": 1006961,
+      "source": "gateway"
+    },
+    "gw_000188": {
+      "amount_paise": 16128900,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000188",
+        "payment_id": null,
+        "settlement_id": "setl_000022",
+        "settlement_utr": "15570013706v6me4"
+      },
+      "kind": "payment",
+      "net_paise": 16128693,
+      "source": "gateway"
+    },
+    "gw_000189": {
+      "amount_paise": 23776600,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000189",
+        "payment_id": null,
+        "settlement_id": "setl_000022",
+        "settlement_utr": "15570013706v6me4"
+      },
+      "kind": "payment",
+      "net_paise": 23215472,
+      "source": "gateway"
+    },
+    "gw_000190": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000190",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000191": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000191",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000192": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000192",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000193": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000193",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000194": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000194",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000195": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000195",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000196": {
+      "amount_paise": 12666300,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000196",
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 12367375,
+      "source": "gateway"
+    },
+    "gw_000197": {
+      "amount_paise": 12291000,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000197",
+        "payment_id": null,
+        "settlement_id": "setl_000023",
+        "settlement_utr": "1675464054gdi3eg"
+      },
+      "kind": "payment",
+      "net_paise": 12000932,
+      "source": "gateway"
+    },
+    "gw_000198": {
+      "amount_paise": 13557900,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000198",
+        "payment_id": null,
+        "settlement_id": "setl_000023",
+        "settlement_utr": "1675464054gdi3eg"
+      },
+      "kind": "payment",
+      "net_paise": 13237934,
+      "source": "gateway"
+    },
+    "gw_000199": {
+      "amount_paise": 5557200,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000199",
+        "payment_id": null,
+        "settlement_id": "setl_000023",
+        "settlement_utr": "1675464054gdi3eg"
+      },
+      "kind": "payment",
+      "net_paise": 5426050,
+      "source": "gateway"
+    },
+    "gw_000200": {
+      "amount_paise": 9832000,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000200",
+        "payment_id": null,
+        "settlement_id": "setl_000023",
+        "settlement_utr": "1675464054gdi3eg"
+      },
+      "kind": "payment",
+      "net_paise": 9599965,
+      "source": "gateway"
+    },
+    "gw_000201": {
+      "amount_paise": 16670000,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000201",
+        "payment_id": null,
+        "settlement_id": "setl_000023",
+        "settlement_utr": "1675464054gdi3eg"
+      },
+      "kind": "payment",
+      "net_paise": 16276588,
+      "source": "gateway"
+    },
+    "gw_000202": {
+      "amount_paise": 22181800,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000202",
+        "payment_id": null,
+        "settlement_id": "setl_000023",
+        "settlement_utr": "1675464054gdi3eg"
+      },
+      "kind": "payment",
+      "net_paise": 21658310,
+      "source": "gateway"
+    },
+    "gw_000203": {
+      "amount_paise": 2535100,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000203",
+        "payment_id": null,
+        "settlement_id": "setl_000024",
+        "settlement_utr": "182473832603xxzm"
+      },
+      "kind": "payment",
+      "net_paise": 2475272,
+      "source": "gateway"
+    },
+    "gw_000204": {
+      "amount_paise": 20820900,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000204",
+        "payment_id": null,
+        "settlement_id": "setl_000024",
+        "settlement_utr": "182473832603xxzm"
+      },
+      "kind": "payment",
+      "net_paise": 20329527,
+      "source": "gateway"
+    },
+    "gw_000205": {
+      "amount_paise": 8535500,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000205",
+        "payment_id": null,
+        "settlement_id": "setl_000024",
+        "settlement_utr": "182473832603xxzm"
+      },
+      "kind": "payment",
+      "net_paise": 8334062,
+      "source": "gateway"
+    },
+    "gw_000206": {
+      "amount_paise": 21066200,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000206",
+        "payment_id": null,
+        "settlement_id": "setl_000024",
+        "settlement_utr": "182473832603xxzm"
+      },
+      "kind": "payment",
+      "net_paise": 20569038,
+      "source": "gateway"
+    },
+    "gw_000233": {
+      "amount_paise": 12416900,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000233",
+        "payment_id": null,
+        "settlement_id": "setl_000028",
+        "settlement_utr": "1585862611g2e9cy"
+      },
+      "kind": "payment",
+      "net_paise": 12123861,
+      "source": "gateway"
+    },
+    "gw_000234": {
+      "amount_paise": 22480900,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000234",
+        "payment_id": null,
+        "settlement_id": "setl_000028",
+        "settlement_utr": "1585862611g2e9cy"
+      },
+      "kind": "payment",
+      "net_paise": 22480693,
+      "source": "gateway"
+    },
+    "gw_000235": {
+      "amount_paise": 16071400,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000235",
+        "payment_id": null,
+        "settlement_id": "setl_000028",
+        "settlement_utr": "1585862611g2e9cy"
+      },
+      "kind": "payment",
+      "net_paise": 15692115,
+      "source": "gateway"
+    },
+    "gw_000236": {
+      "amount_paise": 1584700,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000236",
+        "payment_id": null,
+        "settlement_id": "setl_000028",
+        "settlement_utr": "1585862611g2e9cy"
+      },
+      "kind": "payment",
+      "net_paise": 1547301,
+      "source": "gateway"
+    },
+    "gw_000237": {
+      "amount_paise": 24829700,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000237",
+        "payment_id": null,
+        "settlement_id": "setl_000028",
+        "settlement_utr": "1585862611g2e9cy"
+      },
+      "kind": "payment",
+      "net_paise": 24243719,
+      "source": "gateway"
+    },
+    "gw_000238": {
+      "amount_paise": 11078400,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000238",
+        "payment_id": null,
+        "settlement_id": "setl_000028",
+        "settlement_utr": "1585862611g2e9cy"
+      },
+      "kind": "payment",
+      "net_paise": 10816950,
+      "source": "gateway"
+    },
+    "gw_000288": {
+      "amount_paise": 6201600,
+      "at_utc": 1773210600,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000001",
+        "payment_id": "pay_000001",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "refund",
+      "net_paise": -6201600,
+      "source": "gateway"
+    },
+    "gw_000289": {
+      "amount_paise": 21400,
+      "at_utc": 1775068080,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000005",
+        "payment_id": "pay_000005",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "refund",
+      "net_paise": -21400,
+      "source": "gateway"
+    },
+    "gw_000290": {
+      "amount_paise": 1569233,
+      "at_utc": 1774506600,
+      "currency": "INR",
+      "keys": {
+        "order_id": "order_000015",
+        "payment_id": "pay_000015",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "refund",
+      "net_paise": -1569233,
+      "source": "gateway"
+    },
+    "gw_000291": {
+      "amount_paise": 2044300,
+      "at_utc": 1773901800,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": "pay_000159",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "adjustment",
+      "net_paise": -2044300,
+      "source": "gateway"
+    },
+    "gw_000292": {
+      "amount_paise": 2044300,
+      "at_utc": 1773901800,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": "pay_000159",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "adjustment",
+      "net_paise": 2044300,
+      "source": "gateway"
+    },
+    "gw_000293": {
+      "amount_paise": 5640400,
+      "at_utc": 1774593000,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": "pay_000042",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "adjustment",
+      "net_paise": -5640400,
+      "source": "gateway"
+    },
+    "gw_000294": {
+      "amount_paise": 5640400,
+      "at_utc": 1774593000,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": "pay_000042",
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "adjustment",
+      "net_paise": 5640400,
+      "source": "gateway"
+    },
+    "gw_000295": {
+      "amount_paise": 18271700,
+      "at_utc": 1773135000,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 18271700,
+      "source": "gateway"
+    },
+    "gw_000296": {
+      "amount_paise": 18271700,
+      "at_utc": 1773135000,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 18271700,
+      "source": "gateway"
+    },
+    "gw_000297": {
+      "amount_paise": 13019800,
+      "at_utc": 1773221400,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 13019800,
+      "source": "gateway"
+    },
+    "gw_000298": {
+      "amount_paise": 13019800,
+      "at_utc": 1773221400,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "payment",
+      "net_paise": 13019800,
+      "source": "gateway"
+    },
+    "gw_000299": {
+      "amount_paise": 232700,
+      "at_utc": 1774931400,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "adjustment",
+      "net_paise": -232700,
+      "source": "gateway"
+    },
+    "gw_000300": {
+      "amount_paise": 118000,
+      "at_utc": 1774931400,
+      "currency": "INR",
+      "keys": {
+        "order_id": null,
+        "payment_id": null,
+        "settlement_id": null,
+        "settlement_utr": null
+      },
+      "kind": "adjustment",
+      "net_paise": -118000,
+      "source": "gateway"
+    },
+    "ml_000015": {
+      "amount_paise": 4707700,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000015",
+        "gateway_order_id": "order_000015",
+        "order_ref": "receipt#000015"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000016": {
+      "amount_paise": 4988400,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000016",
+        "gateway_order_id": "order_000016",
+        "order_ref": "receipt#000016"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000017": {
+      "amount_paise": 5048600,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000017",
+        "gateway_order_id": "order_000017",
+        "order_ref": "receipt#000017"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000018": {
+      "amount_paise": 11039800,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000018",
+        "gateway_order_id": "order_000018",
+        "order_ref": "receipt#000018"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000019": {
+      "amount_paise": 3104100,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000019",
+        "gateway_order_id": "order_000019",
+        "order_ref": "receipt#000019"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000020": {
+      "amount_paise": 11079800,
+      "at_utc": 1774420200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000020",
+        "gateway_order_id": "order_000020",
+        "order_ref": "receipt#000020"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000093": {
+      "amount_paise": 17647600,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000093",
+        "gateway_order_id": "order_000143",
+        "order_ref": "receipt#000143"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000094": {
+      "amount_paise": 22207900,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000094",
+        "gateway_order_id": "order_000144",
+        "order_ref": "receipt#000144"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000095": {
+      "amount_paise": 5508800,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000095",
+        "gateway_order_id": "order_000145",
+        "order_ref": "receipt#000145"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000096": {
+      "amount_paise": 22352400,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000096",
+        "gateway_order_id": "order_000146",
+        "order_ref": "receipt#000146"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000097": {
+      "amount_paise": 14329200,
+      "at_utc": 1773815400,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000097",
+        "gateway_order_id": "order_000147",
+        "order_ref": "receipt#000147"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000132": {
+      "amount_paise": 1031300,
+      "at_utc": 1774981680,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000132",
+        "gateway_order_id": "order_000187",
+        "order_ref": "receipt#000187"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000133": {
+      "amount_paise": 16128900,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000133",
+        "gateway_order_id": "order_000188",
+        "order_ref": "receipt#000188"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000134": {
+      "amount_paise": 23776600,
+      "at_utc": 1772605800,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000134",
+        "gateway_order_id": "order_000189",
+        "order_ref": "receipt#000189"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000135": {
+      "amount_paise": 12291000,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000135",
+        "gateway_order_id": "order_000197",
+        "order_ref": "receipt#000197"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000136": {
+      "amount_paise": 13557900,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000136",
+        "gateway_order_id": "order_000198",
+        "order_ref": "receipt#000198"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000137": {
+      "amount_paise": 5557200,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000137",
+        "gateway_order_id": "order_000199",
+        "order_ref": "receipt#000199"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000138": {
+      "amount_paise": 9832000,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000138",
+        "gateway_order_id": "order_000200",
+        "order_ref": "receipt#000200"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000139": {
+      "amount_paise": 16670000,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000139",
+        "gateway_order_id": "order_000201",
+        "order_ref": "receipt#000201"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000140": {
+      "amount_paise": 22181800,
+      "at_utc": 1773124200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000140",
+        "gateway_order_id": "order_000202",
+        "order_ref": "receipt#000202"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000141": {
+      "amount_paise": 2535100,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000141",
+        "gateway_order_id": "order_000203",
+        "order_ref": "receipt#000203"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000142": {
+      "amount_paise": 20820900,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000142",
+        "gateway_order_id": "order_000204",
+        "order_ref": "receipt#000204"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000143": {
+      "amount_paise": 8535500,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000143",
+        "gateway_order_id": "order_000205",
+        "order_ref": "receipt#000205"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000144": {
+      "amount_paise": 21066200,
+      "at_utc": 1772778600,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000144",
+        "gateway_order_id": "order_000206",
+        "order_ref": "receipt#000206"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000171": {
+      "amount_paise": 12416900,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000171",
+        "gateway_order_id": "order_000233",
+        "order_ref": "receipt#000233"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000172": {
+      "amount_paise": 22480900,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000172",
+        "gateway_order_id": "order_000234",
+        "order_ref": "receipt#000234"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000173": {
+      "amount_paise": 16071400,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000173",
+        "gateway_order_id": "order_000235",
+        "order_ref": "receipt#000235"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000174": {
+      "amount_paise": 1584700,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000174",
+        "gateway_order_id": "order_000236",
+        "order_ref": "receipt#000236"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000175": {
+      "amount_paise": 24829700,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000175",
+        "gateway_order_id": "order_000237",
+        "order_ref": "receipt#000237"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000176": {
+      "amount_paise": 11078400,
+      "at_utc": 1773729000,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": "cust_000176",
+        "gateway_order_id": "order_000238",
+        "order_ref": "receipt#000238"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000222": {
+      "amount_paise": 18271700,
+      "at_utc": 1773133200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": null,
+        "gateway_order_id": null,
+        "order_ref": "receipt#000288"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000223": {
+      "amount_paise": 18271700,
+      "at_utc": 1773133200,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": null,
+        "gateway_order_id": null,
+        "order_ref": "receipt#000289"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000224": {
+      "amount_paise": 13019800,
+      "at_utc": 1773219600,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": null,
+        "gateway_order_id": null,
+        "order_ref": "receipt#000290"
+      },
+      "kind": "order",
+      "source": "ledger"
+    },
+    "ml_000225": {
+      "amount_paise": 13019800,
+      "at_utc": 1773219600,
+      "currency": "INR",
+      "keys": {
+        "customer_ref": null,
+        "gateway_order_id": null,
+        "order_ref": "receipt#000291"
+      },
+      "kind": "order",
+      "source": "ledger"
+    }
   },
   "records": 558,
   "refusals": {
@@ -284,7 +3084,7 @@ Ablation (same dataset, layers enabled cumulatively)
     ]
   },
   "unclassified": 0,
-  "wall_clock_ms": 262
+  "wall_clock_ms": 269
 }</script>
 </body>
 </html>

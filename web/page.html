@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%%TITLE%%</title>
+<meta name="description" content="Payment reconciliation: what matched, what did not, and why.">
+<style>
+%%CSS%%
+</style>
+</head>
+<body>
+<main>
+  <h1>FinCtl &mdash; payment reconciliation</h1>
+  <p class="tagline">%%TAGLINE%%</p>
+  <p class="provenance">%%PROVENANCE%%</p>
+  %%BANNER%%
+
+  <h2>What happened <span class="aside">%%STRIP_ASIDE%%</span></h2>
+  <dl class="strip">%%STRIP%%</dl>
+
+  <h2>The cascade <span class="aside">bar width is how many records arrived at that layer</span></h2>
+  <div class="cascade">%%CASCADE%%</div>
+  <p class="note">%%CASCADE_NOTE%%</p>
+
+  <h2>Could not match <span class="aside">%%QUEUE_ASIDE%%</span></h2>
+  %%BY_TYPE%%
+  <div class="queue">%%QUEUE%%</div>
+  <p class="note">%%QUEUE_NOTE%%</p>
+
+  <h2>The numbers, as the harness prints them</h2>
+  <details class="raw">
+    <summary>Full metrics block</summary>
+    <pre>%%BLOCK%%</pre>
+  </details>
+  <details class="raw">
+    <summary>Ablation &mdash; each arm is a real run on the same dataset</summary>
+    <pre>%%ABLATION%%</pre>
+  </details>
+
+  <footer>%%FOOTER%%</footer>
+</main>
+<!-- Every number above is also here as JSON, so the page is machine-readable without scraping
+     the markup. Nothing on this page executes: there is no script, no fetch, and no external
+     reference of any kind. -->
+<script id="run-data" type="application/json">%%DATA%%</script>
+</body>
+</html>

@@ -49,6 +49,9 @@ COPY --chown=finctl:finctl api/ ./api/
 COPY --chown=finctl:finctl scripts/ ./scripts/
 COPY --chown=finctl:finctl fixtures/ ./fixtures/
 COPY --chown=finctl:finctl docs/ ./docs/
+# The page skeleton and stylesheet. Inlined into the output at render time, never served as
+# assets — but the renderer reads them from disk, so the image needs them.
+COPY --chown=finctl:finctl web/ ./web/
 COPY --chown=finctl:finctl cli.py Makefile ./
 
 USER finctl
