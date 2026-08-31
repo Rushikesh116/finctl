@@ -383,10 +383,13 @@ whenever it was applied.
 **The promotion gate is only as strong as its negative examples** (`Q-015`). Mapping where its line
 falls turned up a pattern that passes and probably should not:
 
+Reproduced byte-for-byte from `Q-015` in `docs/OPEN_QUESTIONS.md`:
+
 ```
 ACCEPT  IMPS/([A-Za-z0-9]{8,40})/RAZ     both-side anchored
 REJECT  IMPS/([A-Za-z0-9]{8,40})/        matches IMPS/SETTLEMENT/CR -> "SETTLEMENT"
-ACCEPT  ([A-Za-z0-9]{12,})               passes only because no negative example is that long
+ACCEPT  ([A-Za-z0-9]{12,})               <- passes only because no negative example
+                                            happens to contain a 12+ character run
 REJECT  ([A-Za-z0-9]{8,})                matches SETTLEMENT
 REJECT  (\S+)                            captures too much from its own example
 ```

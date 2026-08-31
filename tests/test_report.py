@@ -393,6 +393,77 @@ def test_numbers_use_tabular_numerals_and_money_is_right_aligned() -> None:
     assert re.search(r"\.num\s*\{[^}]*text-align:\s*right", css), "money column is not right-aligned"
 
 
+# --- quoted material ----------------------------------------------------------------------
+#
+# The README's argument is that this project does not put numbers or claims in documents unless a
+# command produced them. A code block or blockquote in it therefore reads as literal. One of them
+# had been silently reflowed — the content was faithful, but "faithful paraphrase presented as
+# literal" is the failure mode the whole document argues against, so byte-identity is now asserted
+# rather than eyeballed.
+
+
+def _fenced_block(path: Path, needle: str) -> str:
+    """The fenced code block containing `needle`, without its fences."""
+    text = path.read_text(encoding="utf-8")
+    index = text.index(needle)
+    start = text.index("\n", text.rindex("```", 0, index)) + 1
+    return text[start : text.index("```", index)]
+
+
+@pytest.mark.parametrize(
+    ("needle", "source", "label"),
+    [
+        ("ACCEPT  IMPS/", REPO_ROOT / "docs" / "OPEN_QUESTIONS.md", "the Q-015 gate table"),
+        (
+            "pattern also matches a narration with no reference",
+            REPO_ROOT / "docs" / "METRICS.md",
+            "the promotion-gate rejection message",
+        ),
+    ],
+)
+def test_readme_code_blocks_are_byte_identical_to_their_source(
+    needle: str, source: Path, label: str
+) -> None:
+    readme = _fenced_block(REPO_ROOT / "README.md", needle)
+    original = _fenced_block(source, needle)
+
+    assert readme == original, (
+        f"{label} in README.md is not byte-identical to {source.name}. "
+        "Either restore it exactly or present it as prose rather than as a quoted block."
+    )
+
+
+def test_the_verbatim_layer_3_paragraph_matches_the_module_it_quotes() -> None:
+    """The blockquote in Architecture is lifted from `core/assignment.py`.
+
+    Compared with whitespace normalised, because the README rewraps at a different column and
+    carries `> ` markers — those are rendering, not content. Every word must still match.
+    """
+    module = (REPO_ROOT / "core" / "assignment.py").read_text(encoding="utf-8")
+    start = module.index("**Arithmetic is still zero-tolerance**")
+    canonical = " ".join(module[start : module.index("**Assignment is global")].split())
+
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    quote = re.search(r"((?:^> .*\n)+)", readme[readme.index("Layer 3 is where") :], re.M).group(1)
+    quoted = " ".join(quote.replace("> ", " ").split())
+
+    assert quoted == canonical
+
+
+def test_o_002_is_quoted_without_softening_it() -> None:
+    """The strongest sentence in it is the one most worth not paraphrasing."""
+    readme = " ".join(
+        re.sub(r"^>\s?", "", (REPO_ROOT / "README.md").read_text(encoding="utf-8"), flags=re.M)
+        .split()
+    )
+    questions = " ".join((REPO_ROOT / "docs" / "OPEN_QUESTIONS.md").read_text(encoding="utf-8").split())
+
+    start = questions.index("Asking the model which of two interchangeable")
+    canonical = questions[start : questions.index("### O-003")].strip()
+
+    assert canonical in readme
+
+
 # --- integration --------------------------------------------------------------------------
 
 
