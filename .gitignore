@@ -7,9 +7,6 @@ __pycache__/
 # --- Secrets ---
 .env
 
-# --- Local Claude Code state (project skills ARE committed) ---
-.claude/settings.local.json
-
 # --- Generated artefacts ---
 # Datasets are deterministic from their seed, so they are regenerated, not committed.
 # `data/DATASET_HASHES.txt` IS committed so drift is detectable (see docs/SPEC.md).

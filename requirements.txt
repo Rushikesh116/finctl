@@ -1,7 +1,7 @@
 # FinCtl direct dependencies.
 #
 # This list is pinned by §3.2 of the project brief. Adding anything here requires
-# explicit approval first (see CLAUDE.md → "Stop and ask before").
+# explicit approval first (see docs/ENGINEERING_RULES.md → "Stop and ask before").
 #
 # The LLM provider is Google Gemini as of D-0025; `anthropic` was removed because nothing
 # imports it any more. Verified with a grep, not assumed.

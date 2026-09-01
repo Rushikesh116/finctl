@@ -5,7 +5,7 @@ handed on — so the types live here rather than in whichever layer happened to 
 A layer importing its result types from a sibling layer would make the cascade order load-bearing
 in the import graph.
 
-Exception type constants are the closed enum from `.claude/skills/eval-protocol/SKILL.md` §6.
+Exception type constants are the closed enum from `docs/skills/eval-protocol/SKILL.md` §6.
 """
 
 from __future__ import annotations

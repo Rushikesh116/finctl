@@ -234,5 +234,5 @@ occasion. The README states the gap. Do not add a `transfer` pathology without r
 
 FinCtl makes **no** live gateway calls, in either direction, in any phase. There is no
 Razorpay SDK in `requirements.txt` and no credential in `.env.example`. If that ever
-changes it requires explicit approval first (CLAUDE.md → "Stop and ask before"), and
+changes it requires explicit approval first (ENGINEERING_RULES.md → "Stop and ask before"), and
 test-mode credentials read from the environment — never a committed key.

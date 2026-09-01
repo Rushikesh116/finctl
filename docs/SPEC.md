@@ -9,7 +9,7 @@
 > | 2026-08-26 | `Label.pathology: int` → `Label.pathologies: list[int]` (§3.7). Single-valued attribution silently mis-assigned doubly-affected records without failing any test | D-0016 |
 >
 > **Changing anything in this document now requires an entry in `DECISIONS.md` explaining why,
-> and explicit approval** (`CLAUDE.md` → "Stop and ask before"). Everything downstream — the
+> and explicit approval** (`ENGINEERING_RULES.md` → "Stop and ask before"). Everything downstream — the
 > generator, the matcher, the harness, the metrics — is written against these definitions, so
 > an unrecorded change here silently invalidates every result computed before it.
 >
@@ -43,7 +43,7 @@ is **set reconstruction against a single scalar**, not row-to-row matching. That
 distinction is the core of the project.
 
 Field names, units, ID prefixes, and enum values for the real gateway entities are
-recorded — with quotes and source URLs — in `.claude/skills/razorpay-domain/SKILL.md`.
+recorded — with quotes and source URLs — in `skills/razorpay-domain/SKILL.md`.
 This document specifies FinCtl's *canonical internal* schema, which deliberately differs
 in two places (see §3.5).
 
@@ -572,7 +572,7 @@ silent on how the return leg is represented. This is a stated assumption, named 
 ## 6. Metric definitions
 
 Metric definitions, denominators, the closed exception-type enum, and the exact metrics
-block are specified in **`.claude/skills/eval-protocol/SKILL.md`** §3–§6 and are frozen
+block are specified in **`skills/eval-protocol/SKILL.md`** §3–§6 and are frozen
 together with this document. They live there rather than being restated here so the two
 cannot drift apart.
 

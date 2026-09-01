@@ -3,7 +3,7 @@
 Raw pasted stdout of `make eval`, with the git SHA and timestamp of the run above each
 block. Nothing in this file is typed by hand — every number is pasted from a command's
 output. A result that has not been run is `TBD`. See
-`.claude/skills/eval-protocol/SKILL.md` for the paste rule and metric definitions.
+`skills/eval-protocol/SKILL.md` for the paste rule and metric definitions.
 
 ---
 

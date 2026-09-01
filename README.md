@@ -297,7 +297,7 @@ see the class of error it existed to catch. Found by accident, by a mutation tes
 the *false-match detector* could fire; it has since caught a real bug in Layer 2. Disjointness is
 now checked independently, because one expression cannot carry both properties.
 
-**3. The holdout rule proxied by documentation.** `SPEC.md`, the eval protocol and `CLAUDE.md` all
+**3. The holdout rule proxied by documentation.** `SPEC.md`, the eval protocol and `docs/ENGINEERING_RULES.md` all
 stated that the holdout is evaluated once, in Phase 6. The Phase 0 Makefile passed `--holdout` on
 every `make eval`, inert for two phases because no harness existed to honour it. The first real
 `make eval` evaluated the holdout. Three documents agreeing is not enforcement — the rule lived in

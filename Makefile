@@ -1,5 +1,5 @@
 # FinCtl -- build, seed, reconcile, evaluate, report.
-# Every target here is documented in CLAUDE.md. Keep the two in sync.
+# Every target here is documented in docs/ENGINEERING_RULES.md. Keep the two in sync.
 #
 # `make demo` is what a judge runs: it must work on a clean clone with no API key.
 

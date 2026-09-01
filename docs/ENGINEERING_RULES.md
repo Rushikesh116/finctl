@@ -10,15 +10,15 @@ not, and why — then report measured accuracy on a held-out dataset.**
 
 At the start of every session, before touching code, read in this order:
 
-1. **`CLAUDE.md`** (this file) — the rules
+1. **`ENGINEERING_RULES.md`** (this file) — the rules
 2. **`docs/PROGRESS.md`** — which phase we are in and what the next action is
 3. **`docs/OPEN_QUESTIONS.md`** — what is unverified or blocked
 
 Then read the local skill that covers what you are about to change:
 
-- `.claude/skills/razorpay-domain/SKILL.md` — before naming any gateway field
-- `.claude/skills/money-invariants/SKILL.md` — before any arithmetic on an amount
-- `.claude/skills/eval-protocol/SKILL.md` — before running the harness or writing a number
+- `skills/razorpay-domain/SKILL.md` — before naming any gateway field
+- `skills/money-invariants/SKILL.md` — before any arithmetic on an amount
+- `skills/eval-protocol/SKILL.md` — before running the harness or writing a number
 
 These files exist so a fresh context never re-derives a fact that was already verified,
 and never invents one that was not.

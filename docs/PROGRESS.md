@@ -1,7 +1,7 @@
 # Progress
 
 Phase checklist with acceptance criteria and pass/fail state. Updated at the end of every
-phase. This file is authoritative on "which phase are we in" — if `CLAUDE.md` disagrees,
+phase. This file is authoritative on "which phase are we in" — if `ENGINEERING_RULES.md` disagrees,
 this file wins.
 
 > ## Next action
@@ -22,9 +22,7 @@ this file wins.
 >
 > Outstanding questions, none blocking: **Q-004** (USD→INR rate; the harness prints `Rs TBD`
 > until one is pinned), **Q-002/Q-005/Q-006/Q-007/Q-010/Q-011/Q-014** (domain facts no fetched
-> document answers — carried as stated assumptions the README must name), **Q-009** (plugin
-> installs need a human; the marketplace here is `claude-plugins-official`, so the brief's
-> names will not resolve as written).
+> document answers — carried as stated assumptions the README must name).
 
 ---
 
@@ -39,8 +37,8 @@ commit.
 | Stack pinned with **verified** versions | PASS | `requirements.txt` from `pip show` after install; `requirements.lock.txt` holds the transitive closure |
 | Three local skills authored | PASS | `razorpay-domain`, `money-invariants`, `eval-protocol` |
 | `razorpay-domain` from fetched docs only | PASS | 9 pages fetched 2026-08-26, quoted with URLs; 8 gaps marked `UNVERIFIED` and mirrored to `OPEN_QUESTIONS.md` |
-| Memory files written | PASS | `CLAUDE.md`, `SPEC.md`, `DECISIONS.md`, `PROGRESS.md`, `OPEN_QUESTIONS.md`, `METRICS.md`, `WHAT_BROKE.md`, `README.md` |
-| Makefile: 8 targets + `clean` | PASS | `make help`; a test asserts every target exists **and** is documented in `CLAUDE.md` |
+| Memory files written | PASS | `ENGINEERING_RULES.md`, `SPEC.md`, `DECISIONS.md`, `PROGRESS.md`, `OPEN_QUESTIONS.md`, `METRICS.md`, `WHAT_BROKE.md`, `README.md` |
+| Makefile: 8 targets + `clean` | PASS | `make help`; a test asserts every target exists **and** is documented in `ENGINEERING_RULES.md` |
 | `make setup` runs clean | PASS | `setup ok -- Python 3.13.14` |
 | `make test` runs clean | PASS | `32 passed, 2 skipped` |
 | `git log` shows one commit | PASS | single Phase 0 commit |

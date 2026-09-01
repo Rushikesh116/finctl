@@ -2,7 +2,7 @@
 
 Built ahead of three of the four matching layers, on purpose: every later improvement is then
 measured against a *recorded* baseline rather than a remembered one. Metric definitions,
-denominators and the block format are specified in `.claude/skills/eval-protocol/SKILL.md` and
+denominators and the block format are specified in `docs/skills/eval-protocol/SKILL.md` and
 frozen with `docs/SPEC.md`.
 
 Whatever this prints is what ships. Nothing here is tuned to hit a number.

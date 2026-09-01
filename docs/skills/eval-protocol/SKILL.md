@@ -64,7 +64,7 @@ the fixture cache is incomplete and that is a bug, not an excuse.
 
 **Holdout discipline.** `holdout_seed_97` is evaluated **once**, in Phase 6, and whatever
 it prints is what ships — even if it is worse than dev. Touching it for anything else
-requires explicit approval (CLAUDE.md → "Stop and ask before"). Iterating against a
+requires explicit approval (ENGINEERING_RULES.md → "Stop and ask before"). Iterating against a
 holdout converts it into a training set and every number after that is a lie.
 
 **Determinism check.** Two consecutive runs on the same seed and input must produce a
@@ -279,9 +279,11 @@ Rates **verified 2026-08-26** from
 
 | Model | Input $/MTok | Output $/MTok |
 |---|---|---|
-| `claude-opus-5` (FinCtl default) | $5 | $25 |
+| `claude-opus-5` | $5 | $25 |
 | `claude-sonnet-5` | $2 | $10 |
 | `claude-haiku-4-5` | $1 | $5 |
+
+The provider was swapped to Google Gemini (D-0025). **FinCtl's model is `gemini-3.7-flash` at $0.75 / $3.75 per MTok**; the rates above are retained because the cost-reporting rule they justify is provider-independent.
 
 The block reports **`Cost / 1000` in rupees**, which needs an FX rate. `FINCTL_USD_INR`
 is deliberately **empty** in `.env.example`: with no rate set, the harness prints the USD

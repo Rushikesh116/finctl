@@ -615,7 +615,7 @@ balances". *2026-08-26*
 
 ## D-0025 — LLM provider swapped from Anthropic to Google Gemini
 
-**Deviates from the pinned stack** (`CLAUDE.md` → "Stop and ask before" lists adding or changing
+**Deviates from the pinned stack** (`ENGINEERING_RULES.md` → "Stop and ask before" lists adding or changing
 a dependency). Requested explicitly; recorded here before the adapter was written.
 
 **Reason: API access, not capability.** Nothing about the Anthropic path was found wanting — it

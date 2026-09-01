@@ -7,7 +7,7 @@ Invariant 2 — the matcher must never read ground truth: nothing under ``core/`
 import the generator, the scenario config, or the harness.
 
 These run from Phase 0 so a violation fails the commit that introduces it rather than
-surfacing at review time, or worse, as a suspiciously good metric. See CLAUDE.md.
+surfacing at review time, or worse, as a suspiciously good metric. See docs/ENGINEERING_RULES.md.
 """
 
 from __future__ import annotations
@@ -107,7 +107,7 @@ def test_money_module_never_calls_float() -> None:
 
     assert not offenders, (
         "core/money.py calls float() or round(). Use integer arithmetic; rounding "
-        "direction is defined in .claude/skills/money-invariants/SKILL.md.\n  "
+        "direction is defined in docs/skills/money-invariants/SKILL.md.\n  "
         + "\n  ".join(offenders)
     )
 

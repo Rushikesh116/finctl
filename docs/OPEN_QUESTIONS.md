@@ -18,7 +18,7 @@ guess.
 The brief asks for `data/scenarios.yaml` (Phase 1) holding the twelve pathologies and their
 mix weights. Nothing in the §3.2 stack table can parse YAML — there is no `pyyaml`, and
 Python has no YAML in the standard library. Adding a dependency requires approval
-(`CLAUDE.md` → "Stop and ask before"), so this has not been done.
+(`ENGINEERING_RULES.md` → "Stop and ask before"), so this has not been done.
 
 **Options.**
 
@@ -147,24 +147,6 @@ transfers are out of scope and the README should say so.
 **Status: RESOLVED 2026-08-26 — transfers are out of scope (D-0012).** Stated explicitly in
 the README's limitations rather than papered over with a 13th pathology whose semantics no
 fetched document defines. Cheap to state, expensive to fake.
-
----
-
-## Q-009 — Marketplace plugin installs need a human
-
-The brief suggests `/plugin install security-guidance@claude-code-plugins` and
-`commit-commands@claude-code-plugins`. Verified in this environment: the CLI does expose
-`claude plugin install [--scope project|user|local]`, and one marketplace is configured —
-but it is named **`claude-plugins-official`** (source `anthropics/claude-plugins-official`),
-not `claude-code-plugins`, so the names in the brief will not resolve as written. No plugins
-are currently installed.
-
-Installing into the user's config is their call, not mine. **Suggested:**
-`claude plugin install security-guidance@claude-plugins-official --scope project` — and if
-that name does not resolve, browse with `/plugin` and pick the nearest equivalent rather
-than inventing a name.
-
-**Resolves when:** the user runs it, or says skip.
 
 ---
 

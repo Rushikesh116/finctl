@@ -6,26 +6,27 @@ The provider is **Google Gemini** (`google-genai`, model `gemini-3.7-flash`), sw
 Anthropic for API access rather than capability — see D-0025. The swap touched this one class,
 which is the verifier boundary working as designed rather than a lucky refactor.
 
-**No call in this repository has ever reached any model API.** There was no `ANTHROPIC_API_KEY`
-before the swap and there is no `GEMINI_API_KEY`, `GOOGLE_API_KEY`, ADC file or `gcloud` after
-it, so the swap did not achieve its stated purpose in this environment. The live path is written
-against the installed SDK with every parameter name verified against the package, and it has
-**still never been executed against a real model**. Every fixture in `fixtures/llm/` was
-produced by `OfflineProposer` below and is tagged `"source": "offline_stub"`; the harness detects
-that tag and prints a warning in the metrics block. Any run reporting LLM figures is reporting
-the stub.
+**The fixture set is MIXED, and every run says so.** Two narration shapes were served live by
+`gemini-3.7-flash` in Phase 5 before the free-tier allowance of 20 requests per day was
+exhausted; the rest of `fixtures/llm/` was produced by `OfflineProposer` below and is tagged
+`"source": "offline_stub"`. The harness detects that tag and prints a warning in the metrics
+block naming the count. Do not read an LLM figure here as fully model-derived.
 
-What that does and does not invalidate, precisely:
+What the live calls did and did not establish:
 
-* **Unaffected** — the regex promotion machinery. Validation, negative-example rejection,
-  caching, persistence and deterministic re-extraction are all real code doing real work, and
-  the falling call curve is a genuine property of that machinery. Only the *author* of a
-  candidate regex is stubbed.
+* **Established** — the promotion gate refuses real model output. Asked about
+  `IMPS/1888481283mjoasu/RAZORPAY SOFTWARE`, the model proposed `^IMPS/([a-zA-Z0-9]+)/`, which
+  the gate rejected because it also matches `IMPS/SETTLEMENT/CR` and would have attached
+  `SETTLEMENT` as a reference to every unparsed credit thereafter. A hand-written test predicted
+  that exact shape before any key existed.
+* **Established** — confidence carries no safety signal. The model reported 95 on that pattern
+  and 95 on the one that was accepted. The gate did all the discriminating; a design gating on
+  `confidence >= 90` would have cached both.
 * **Unaffected** — the verifier boundary. A proposal is arithmetic-checked whatever produced it,
   so "a hallucinated match cannot enter the ledger" holds by construction rather than by trust.
-* **Unverified** — whether a real model would propose usable regexes at a useful rate, and what
-  it would actually cost. Those are the two things the stub cannot tell us, and swapping the
-  provider did not change that.
+* **Still unverified** — the cold call rate and the real cost per run. The cold attempt was
+  terminated by quota exhaustion, so the metrics block prints `not measured` rather than an
+  estimate, and one narration shape was never reached by a real call at all.
 
 Three modes, chosen explicitly rather than by accident:
 

@@ -16,7 +16,7 @@ Two rules this module is held to, both enforced by tests rather than by discipli
 Rounding is half-up (D-0005). The rule that catches people: **any aggregate of a rounded
 per-row quantity must be a sum of the stored per-row values**, never a recomputation from
 the aggregated base — half-up does not distribute over addition. See
-`.claude/skills/money-invariants/SKILL.md`.
+`docs/skills/money-invariants/SKILL.md`.
 """
 
 from __future__ import annotations

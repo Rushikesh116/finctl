@@ -65,7 +65,7 @@ holdout is specified to be evaluated exactly once, in Phase 6.
 **Diagnosis.** The Phase 0 Makefile defined `eval` as
 `--dev $(DEV_DATASET) --holdout $(HOLDOUT_DATASET) --ablation`. It was written before the
 harness existed, so the flag was inert for two phases and nothing surfaced it. `SPEC.md`,
-`eval-protocol` and `CLAUDE.md` all state the once-only rule; the Makefile quietly contradicted
+`eval-protocol` and `ENGINEERING_RULES.md` all state the once-only rule; the Makefile quietly contradicted
 all three, and the discipline lived only in prose.
 
 **Fix.** `make eval` now runs the dev dataset only. The holdout moved to a separate
@@ -233,7 +233,7 @@ cannot carry both properties.
 
 ### 3. The holdout rule proxied by documentation
 
-`SPEC.md`, `eval-protocol` and `CLAUDE.md` all stated that the holdout is evaluated once, in
+`SPEC.md`, `eval-protocol` and `ENGINEERING_RULES.md` all stated that the holdout is evaluated once, in
 Phase 6. The Phase 0 Makefile passed `--holdout` on every `make eval`. The flag was inert for
 two phases because no harness existed to honour it, so nothing surfaced the contradiction, and
 the first real `make eval` evaluated the holdout.

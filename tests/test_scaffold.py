@@ -15,7 +15,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 MEMORY_FILES = [
-    "CLAUDE.md",
+    "docs/ENGINEERING_RULES.md",
     "README.md",
     "docs/SPEC.md",
     "docs/DECISIONS.md",
@@ -26,9 +26,9 @@ MEMORY_FILES = [
 ]
 
 SKILL_FILES = [
-    ".claude/skills/razorpay-domain/SKILL.md",
-    ".claude/skills/money-invariants/SKILL.md",
-    ".claude/skills/eval-protocol/SKILL.md",
+    "docs/skills/razorpay-domain/SKILL.md",
+    "docs/skills/money-invariants/SKILL.md",
+    "docs/skills/eval-protocol/SKILL.md",
 ]
 
 PROJECT_FILES = [
@@ -71,8 +71,8 @@ def test_makefile_declares_target(target: str) -> None:
     assert f"\n{target}:" in makefile, f"Makefile has no `{target}` target"
 
 
-def test_claude_md_records_every_make_target() -> None:
-    """CLAUDE.md is the contract for future sessions; an undocumented target rots it."""
-    claude_md = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    undocumented = [t for t in MAKE_TARGETS if f"`make {t}`" not in claude_md]
-    assert not undocumented, f"CLAUDE.md does not document: {', '.join(undocumented)}"
+def test_engineering_rules_records_every_make_target() -> None:
+    """docs/ENGINEERING_RULES.md is the contract for future sessions; an undocumented target rots it."""
+    engineering_rules = (REPO_ROOT / "docs/ENGINEERING_RULES.md").read_text(encoding="utf-8")
+    undocumented = [t for t in MAKE_TARGETS if f"`make {t}`" not in engineering_rules]
+    assert not undocumented, f"docs/ENGINEERING_RULES.md does not document: {', '.join(undocumented)}"
