@@ -111,6 +111,8 @@ def compute_run(dataset: str = "dev_seed_11") -> dict[str, Any]:
         # shadowed it with the digest dict. Rendering then failed on `f"{n:,}"` against a dict --
         # loudly, which is the only reason it did not ship as a wrong number.
         "record_digest": metrics.record_digest,
+        "worked_example": metrics.worked_example,
+        "source_counts": metrics.source_counts,
         "block": harness.render(metrics),
         "ablation": harness.render_ablation(dataset),
     }

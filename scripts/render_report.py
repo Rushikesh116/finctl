@@ -152,7 +152,11 @@ def _strip(run: dict) -> str:
 def _cascade(run: dict) -> str:
     n = run["records"]
     if not n:
-        return '<p class="empty">No records. Run <code>make demo</code>.</p>'
+        return (
+            '<div class="empty"><strong>No run to show.</strong>'
+            "The datasets have not been generated yet, so there is nothing to reconcile. Run "
+            "<code>make demo</code> to build them and produce a run.</div>"
+        )
 
     entering = {int(k): v for k, v in run["entering"].items()}
     resolved = {int(k): v for k, v in run["per_layer"].items()}
@@ -376,10 +380,14 @@ def _trail(item: dict) -> str:
 def _queue(run: dict) -> str:
     items = run["exception_items"]
     if not items:
+        # Terminal states get a sentence explaining what the emptiness means, not just the fact of
+        # it. "Nothing here" leaves a reader unsure whether the queue is clear or the run failed.
         return (
-            '<p class="empty">Nothing in the queue &mdash; every record matched and the verifier '
-            "approved each group. If that is unexpected, run <code>make eval</code> and check the "
-            "false-match rate before believing it.</p>"
+            '<div class="empty"><strong>Nothing to review.</strong>'
+            "Every record was matched to a counterpart and each group balanced against the bank "
+            "to the paisa. That is the intended end state, not an error &mdash; but if it is "
+            "unexpected for this dataset, run <code>make eval</code> and check the false-match "
+            "rate before trusting it.</div>"
         )
 
     records = run["record_digest"]
@@ -403,6 +411,87 @@ def _queue(run: dict) -> str:
             f"</div></details>"
         )
     return "".join(blocks)
+
+
+def _intro(run: dict) -> str:
+    """Explain the problem to someone who has never seen this page.
+
+    Plain language throughout: no δ, no netting, no subset-sum, no cascade. A reader who does not
+    already know what a settlement batch is should be able to finish this block understanding why
+    a reference lookup cannot solve it.
+
+    Every figure is read from the run rather than written into the sentence, so the prose cannot
+    drift from the dataset it is describing.
+    """
+    counts = run.get("source_counts") or {}
+    sales = counts.get("merchant_sales")
+    credits = counts.get("bank_credits")
+    example = run.get("worked_example")
+
+    parts: list[str] = []
+
+    if sales and credits:
+        parts.append(
+            f'<p class="lede">This shop made <strong>{sales:,} sales</strong> in a month. '
+            f"Its bank statement for the same month has <strong>{credits} credits</strong> on "
+            f"it.</p>"
+        )
+        parts.append(
+            "<p>That gap is the whole problem. The payment company does not pay out one sale at "
+            "a time. It gathers up a batch, subtracts its own fee and the tax on that fee, "
+            "subtracts anything that was refunded, and sends a single amount. So one line on the "
+            "bank statement is dozens of sales added together and then reduced by charges that "
+            "are written down nowhere on that line.</p>"
+        )
+    parts.append(
+        "<p>Checking one of those credits is therefore not a lookup. There is no reference number "
+        "that leads from the bank line back to the sales inside it. The question is "
+        "<strong>which set of transactions adds up to exactly this amount</strong> — and you "
+        "cannot answer it by matching one row to one row.</p>"
+    )
+
+    if example:
+        joined_share = (
+            100 * int(example["joined_paise"]) / int(example["credit_paise"])
+            if example["credit_paise"]
+            else 0
+        )
+        parts.append(
+            f"<p>Here is a real one from this run, the payout dated "
+            f"{_esc(example['value_date_ist'])}:</p>"
+        )
+        parts.append(
+            f'<div class="worked"><dl>'
+            f"<dt>What the bank shows<small>one credit, one line</small></dt>"
+            f"<dd>{_esc(_rupees(int(example['credit_paise'])))}</dd>"
+            f"<dt>Transactions that name this payout"
+            f"<small>{example['joined_rows']} rows, found by their reference</small></dt>"
+            f"<dd>{_esc(_rupees(int(example['joined_paise'])))}</dd>"
+            f'<dt class="gap">Left unexplained'
+            f"<small>only {joined_share:.0f}% of the credit accounted for so far</small></dt>"
+            f'<dd class="gap">{_esc(_rupees(int(example["searched_paise"])))}</dd>'
+            f'<dt class="closed">Transactions that close it exactly'
+            f"<small>{example['searched_rows']} rows, and nothing links them to this payout"
+            f"</small></dt>"
+            f'<dd class="closed">{_esc(_rupees(int(example["searched_paise"])))}</dd>'
+            f"</dl></div>"
+        )
+        parts.append(
+            f"<p>Those last {example['searched_rows']} rows carry no reference, no batch number, "
+            f"nothing at all tying them to this payout. They were found by searching for a "
+            f"combination that closes the gap to the paisa, and they were only accepted after the "
+            f"total was recomputed against the bank figure and matched exactly. A lookup finds "
+            f"{example['joined_rows']} of the {int(example['joined_rows']) + int(example['searched_rows'])} "
+            f"rows behind this credit. The rest have to be worked out.</p>"
+        )
+
+    parts.append(
+        "<p>FinCtl does this for every credit on the statement, and where the records genuinely "
+        "do not settle the question, it says so rather than guessing. "
+        "<strong>Click any row in the list below to see the records and the reasoning behind that "
+        "decision.</strong></p>"
+    )
+    return "".join(parts)
 
 
 def _banner(run: dict) -> str:
@@ -441,57 +530,93 @@ def build_html(run: dict) -> str:
 
     provenance = " ".join(
         [
-            f"<span><b>Dataset</b> {_esc(run['dataset'])}</span>",
-            f"<span><b>Data</b> {_esc(prov['dataset_sha'])}</span>",
-            f"<span><b>Code</b> {_esc(prov['git_sha'])}</span>",
-            f"<span><b>Run</b> {_esc(prov['started_at_utc'])} UTC</span>",
-            f"<span><b>Wall clock</b> {run['wall_clock_ms']:,} ms</span>",
+            f"<span><b>Dataset</b> <span class='v'>{_esc(run['dataset'])}</span></span>",
+            f"<span><b>Data</b> <span class='v'>{_esc(prov['dataset_sha'])}</span></span>",
+            f"<span><b>Code</b> <span class='v'>{_esc(prov['git_sha'])}</span></span>",
+            f"<span><b>Run</b> <span class='v'>{_esc(prov['started_at_utc'])} UTC</span></span>",
+            f"<span><b>Wall clock</b> <span class='v'>{run['wall_clock_ms']:,} ms</span></span>",
             f"<span><b>Adjudicator</b> {_esc(llm['provider'])}"
             + (f" {_esc(', '.join(llm['model_versions']))}" if llm["model_versions"] else "")
             + f" ({_esc(llm['mode'])})</span>",
             f"<span><b>Ledger</b> {run['ledger']['entries']:,} entries, head "
-            f"{_esc(run['ledger']['head'][:12])}</span>",
+            f"<span class='v'>{_esc(run['ledger']['head'][:12])}</span></span>",
         ]
     )
 
     absent = run["by_class"].get("absent", 0)
     undetermined = run["by_class"].get("undetermined", 0)
+    matched = run["auto_matched"]
+    items = len(run["exception_items"])
 
     replacements = {
         "%%TITLE%%": _esc(TITLE),
         "%%CSS%%": css,
+        "%%H1%%": _esc("Payment reconciliation"),
         "%%TAGLINE%%": _esc(
-            "Three sources describe the same money. Gateways settle in net batches, so "
-            "reconciling one bank credit is set reconstruction against a single scalar, not "
-            "row-to-row matching."
+            "Three records of the same money — what the shop sold, what the payment company "
+            "processed, and what reached the bank — checked against each other, with everything "
+            "that did not line up listed and explained."
         ),
         "%%PROVENANCE%%": provenance,
         "%%BANNER%%": _banner(run),
-        "%%STRIP_ASIDE%%": _esc(f"{run['dataset']}, evaluated in full"),
-        "%%STRIP%%": _strip(run),
-        "%%CASCADE%%": _cascade(run),
-        "%%CASCADE_NOTE%%": _esc(
-            "Each layer sees only what the layers above it could not settle, so the bars narrow. "
-            "A layer whose bar matches the one above it resolved nothing on this dataset — which "
-            "is a result about the layer, not a rendering artefact."
+        # --- intro ---
+        "%%INTRO_H%%": _esc("What this page is"),
+        "%%INTRO_SAYS%%": _esc(
+            "Why matching a bank credit to the sales behind it is harder than looking up a "
+            "reference number."
         ),
-        "%%QUEUE_ASIDE%%": _esc(
-            f"{len(run['exception_items'])} exceptions covering {run['exceptions']:,} records"
+        "%%INTRO%%": _intro(run),
+        # --- strip ---
+        "%%STRIP_H%%": _esc("The result"),
+        "%%STRIP_SAYS%%": _esc(
+            f"How much of this run FinCtl settled on its own, and how much it got wrong — "
+            f"measured against known answers it never reads while matching."
+        ),
+        "%%STRIP%%": _strip(run),
+        # --- cascade ---
+        "%%CASCADE_H%%": _esc("How the work was done"),
+        "%%CASCADE_SAYS%%": _esc(
+            "Four methods, tried in order, each one handed only what the methods before it could "
+            "not settle."
+        ),
+        "%%CASCADE%%": _cascade(run),
+        "%%CASCADE_CAPTION%%": _esc(
+            "Each bar is how many records arrived at that step, so the bars narrow as the work "
+            "gets done. A bar the same width as the one above it means that step settled nothing "
+            "on this run — which is a fact about the method, not a drawing error."
+        ),
+        # --- queue ---
+        "%%QUEUE_H%%": _esc("What could not be matched"),
+        "%%QUEUE_SAYS%%": _esc(
+            f"{items} findings covering {run['exceptions']:,} records, worth "
+            f"{_rupees(run['at_risk_paise'])}, ordered with the most money first."
         ),
         "%%BY_TYPE%%": _by_type(run),
         "%%QUEUE%%": _queue(run),
-        "%%QUEUE_NOTE%%": _esc(
-            f"Declining is a success where the data does not determine an answer. Of these "
-            f"records, {absent} have no counterpart in the data at all and {undetermined} have "
-            f"one that cannot be identified. Every refusal above carries the evidence it was "
-            f"refused on."
+        "%%QUEUE_CAPTION%%": _esc(
+            f"Click a row to open it. Refusing to answer is the right outcome where the records "
+            f"do not settle the question: {absent} of these have no counterpart in the data at "
+            f"all, and {undetermined} have one that cannot be told apart from another. Each open "
+            f"row shows the records involved, the alternatives that were weighed, and the audit "
+            f"entries written at the time."
         ),
-        "%%BLOCK%%": _esc(run["block"]) or "Run <code>make eval</code>.",
-        "%%ABLATION%%": _esc(run["ablation"]) or "Run <code>make eval</code>.",
+        # --- raw ---
+        "%%RAW_H%%": _esc("The underlying numbers"),
+        "%%RAW_SAYS%%": _esc(
+            "The same run as printed by the command line, for anyone who wants to check the "
+            "figures above against their source."
+        ),
+        "%%BLOCK_SUMMARY%%": _esc("Full metrics, exactly as make eval prints them"),
+        "%%ABLATION_SUMMARY%%": _esc(
+            "Each method measured on its own — every row is a real run, not a subtraction"
+        ),
+        "%%BLOCK%%": _esc(run["block"]) or "Run make eval.",
+        "%%ABLATION%%": _esc(run["ablation"]) or "Run make eval.",
         "%%FOOTER%%": (
-            f"{_esc(str(n))} records reconciled in {run['wall_clock_ms']:,} ms. "
-            f"Money is integer paise throughout and is formatted to rupees only at this "
-            f"boundary. No script runs on this page and it makes no network requests."
+            f"{matched:,} of {n:,} records matched in {run['wall_clock_ms']:,} ms. "
+            f"Amounts are held as whole paise throughout and turned into rupees only here, at the "
+            f"point of display. Nothing on this page runs, and it requests nothing from the "
+            f"network."
         ),
         # `</` is the only sequence that can terminate a script element early, so escaping it is
         # what keeps inlined data from being able to break out of the block.

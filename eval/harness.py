@@ -113,6 +113,9 @@ class Metrics:
     refusals: dict[str, tuple[int, int]] = field(default_factory=dict)
     ledger_entries: int = 0
     ledger_head: str = ""
+    # One real batch, computed at run time, used to explain the problem on the page.
+    worked_example: dict[str, object] | None = None
+    source_counts: dict[str, object] = field(default_factory=dict)
     # The objects themselves, not just counts. The UI has to show an operator *why* a record was
     # declined, and a refusal's evidence is only auditable if it travels with the refusal.
     exceptions: list[results.ReconException] = field(default_factory=list)
@@ -505,8 +508,78 @@ def evaluate(
     metrics.ledger = ledger.entries
     metrics.exceptions = list(result.exceptions)
     metrics.record_digest = _record_digest(data, list(result.exceptions))
+    metrics.worked_example = _worked_example(data, result)
+    metrics.source_counts = _source_counts(data)
 
     return metrics
+
+
+def _source_counts(data: NormalizedDataset) -> dict[str, int]:
+    """How many rows each source contributed, and over what span.
+
+    The page opens by contrasting how many sales a merchant made with how few lines the bank
+    shows, because that ratio *is* the problem. Both numbers are counted here rather than written
+    into the prose, so the sentence cannot drift from the dataset it describes.
+    """
+    dates = sorted(row.value_date_ist for row in data.bank_rows)
+    return {
+        "merchant_sales": sum(1 for r in data.merchant_rows if r.kind == "order"),
+        "merchant_refunds": sum(1 for r in data.merchant_rows if r.kind != "order"),
+        "gateway_rows": len(data.gateway_rows),
+        "bank_credits": sum(1 for r in data.bank_rows if r.credit_paise > 0),
+        "bank_debits": sum(1 for r in data.bank_rows if r.debit_paise > 0),
+        "first_value_date": dates[0] if dates else "",
+        "last_value_date": dates[-1] if dates else "",
+    }
+
+
+def _worked_example(
+    data: NormalizedDataset, result: identity.LayerResult
+) -> dict[str, object] | None:
+    """One real settled batch, picked to show why this is not a join.
+
+    The page opens by explaining the problem to a reader who has never seen it, and the honest way
+    to do that is with a batch from the dataset in front of them rather than an invented
+    illustration. Computed rather than written down: a hardcoded example would silently become
+    false the first time the generator changed, which is the whole failure this project keeps
+    finding in itself.
+
+    Selects the resolved batch whose *searched* rows carry the most money — the case where the
+    trivial join explains least, and therefore where the difference between joining and searching
+    is most visible.
+    """
+    gateway_by_id = {row.row_id: row for row in data.gateway_rows}
+    bank_by_id = {row.row_id: row for row in data.bank_rows}
+
+    best: dict[str, object] | None = None
+    for group in result.groups:
+        if not group.settlement_id or group.bank_row_id not in bank_by_id:
+            continue
+
+        members = [gateway_by_id[i] for i in group.record_ids if i in gateway_by_id]
+        # Rows the reference join would find, versus rows only the subset search reaches. The
+        # second set is the point: nothing in the data links them to this batch.
+        joined = [row for row in members if row.settlement_id == group.settlement_id]
+        searched = [row for row in members if row.settlement_id != group.settlement_id]
+        if not searched or not joined:
+            continue
+
+        searched_paise = sum(row.net_paise for row in searched)
+        if best is not None and searched_paise <= int(best["searched_paise"]):  # type: ignore[arg-type]
+            continue
+
+        bank = bank_by_id[group.bank_row_id]
+        best = {
+            "settlement_id": group.settlement_id,
+            "value_date_ist": bank.value_date_ist,
+            "credit_paise": bank.credit_paise,
+            "joined_rows": len(joined),
+            "joined_paise": sum(row.net_paise for row in joined),
+            "searched_rows": len(searched),
+            "searched_paise": searched_paise,
+        }
+
+    return best
 
 
 def _record_digest(

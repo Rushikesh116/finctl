@@ -325,9 +325,18 @@ def test_renderer_never_converts_money_to_float() -> None:
 
 
 def test_empty_queue_says_what_to_run_and_what_to_distrust() -> None:
+    """An empty state must explain the emptiness, not just report it.
+
+    Asserted as three properties rather than one exact sentence, because the wording is meant to
+    be edited and a test pinned to it would object to improvements while still permitting a bare
+    "Nothing here."
+    """
     page = build_html(_run(exception_items=[], exceptions=0, by_type={}))
-    assert "Nothing in the queue" in page
-    assert "make eval" in page
+    empty = re.search(r'<div class="empty">(.*?)</div>', page, re.S).group(1)
+
+    assert re.search(r"<strong>[^<]+</strong>", empty), "no plain-language headline"
+    assert len(re.sub(r"<[^>]+>", "", empty).split()) >= 15, "states the fact without explaining it"
+    assert "make eval" in empty, "does not say what to run"
 
 
 def test_no_records_says_what_to_run() -> None:
@@ -387,10 +396,79 @@ def test_palette_is_grayscale_plus_exactly_two_accents() -> None:
     assert accents == {"resolved", "exception"}
 
 
-def test_numbers_use_tabular_numerals_and_money_is_right_aligned() -> None:
+def _css_rules_for(css: str, selector: str) -> list[str]:
+    """Every rule body whose selector list contains `selector` as a whole token.
+
+    Parsed rather than pattern-matched against one literal spelling: `.num { }` and
+    `.num, .mono { }` are the same rule for this purpose, and an earlier version of this test
+    failed on the second only because it was looking for the first.
+    """
+    # Comments first: a `/* ... */` sitting above a rule is otherwise swallowed into the selector
+    # chunk, and `.num` stops matching because the chunk reads "/* Money and counts only. */ .num".
+    stripped = re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
+
+    bodies = []
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", stripped):
+        selectors = [s.strip() for s in match.group(1).split(",")]
+        if any(s == selector or s.endswith(f" {selector}") for s in selectors):
+            bodies.append(match.group(2))
+    return bodies
+
+
+def test_money_and_counts_are_monospace_tabular_and_right_aligned() -> None:
+    """Money is the only thing on the page set in monospace, and it must line up column-wise."""
     css = (REPO_ROOT / "web" / "app.css").read_text(encoding="utf-8")
-    assert "tabular-nums" in css
-    assert re.search(r"\.num\s*\{[^}]*text-align:\s*right", css), "money column is not right-aligned"
+
+    bodies = _css_rules_for(css, ".num")
+    assert bodies, "no rule targets .num at all"
+    combined = " ".join(bodies)
+    assert re.search(r"text-align:\s*right", combined), "money column is not right-aligned"
+    assert "tabular-nums" in combined, "money column does not use tabular numerals"
+    assert "--mono" in combined, "money column is not set in the monospace face"
+
+
+def test_body_text_is_the_sans_face_not_monospace() -> None:
+    """Monospace is reserved for figures; running prose is set in the system sans face."""
+    css = (REPO_ROOT / "web" / "app.css").read_text(encoding="utf-8")
+    body = " ".join(_css_rules_for(css, "body"))
+
+    assert "--sans" in body, "body is not set in the sans face"
+    assert "--mono" not in body, "body is set in monospace"
+
+
+def test_headings_are_large_and_light_with_a_sentence_beneath() -> None:
+    """The Munim Today pattern: a large light heading, one grey sentence saying what it shows."""
+    css = (REPO_ROOT / "web" / "app.css").read_text(encoding="utf-8")
+    h2 = " ".join(_css_rules_for(css, "h2"))
+
+    weight = re.search(r"font-weight:\s*(\d+)", h2)
+    assert weight and int(weight.group(1)) <= 300, "section headings are not light-weight"
+    assert _css_rules_for(css, ".says"), "no style for the sentence under a heading"
+
+    page = build_html(_run())
+    # Every h2 is immediately followed by its explanatory sentence.
+    for heading in re.finditer(r"<h2>.*?</h2>\s*(.{0,40})", page, re.S):
+        assert 'class="says"' in heading.group(1), "a heading has no sentence beneath it"
+
+
+def test_cards_are_hairline_bordered_on_a_near_white_ground() -> None:
+    css = (REPO_ROOT / "web" / "app.css").read_text(encoding="utf-8")
+    card = " ".join(_css_rules_for(css, ".card"))
+
+    assert re.search(r"border:\s*1px", card), "cards do not have a hairline border"
+    assert "--radius" in card or re.search(r"border-radius", card), "cards are not rounded"
+    assert re.search(r"padding:\s*[\d.]+rem", card), "cards have no internal padding"
+
+
+def test_no_navigation_icons_or_dead_controls() -> None:
+    """One page, so no nav; and nothing may imply interaction that does not exist."""
+    page = build_html(_run(exception_items=[_item()], record_digest=_digest()))
+
+    assert "<nav" not in page and "<aside" not in page, "the page grew navigation"
+    assert "<button" not in page, "a button implies an action this page cannot perform"
+    assert "<svg" not in page and "<img" not in page, "an icon crept in"
+    # Only <summary> is interactive, and only because <details> makes it genuinely so.
+    assert page.count("cursor: pointer") <= 2
 
 
 # --- quoted material ----------------------------------------------------------------------
