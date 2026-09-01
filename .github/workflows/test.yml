@@ -1,0 +1,45 @@
+# The point of this file is stated in the README: a project whose central finding is that green
+# suites lie should not rest on a suite that is green only on one laptop.
+#
+# Deliberately minimal. No matrix, because the project pins one interpreter (D-0001) and testing
+# versions it does not support would be theatre. No coverage service, because line coverage is a
+# proxy metric in a repository whose dominant failure mode is proxy metrics. No deploy step,
+# because deploys authenticate as the repository owner and not as CI.
+
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # Into .venv, because that is where the Makefile looks. Installing the full transitive
+      # closure rather than the direct pins is deliberate: CI should fail when a transitive
+      # dependency moves, which is exactly what a loose install would hide.
+      - name: Install pinned dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -r requirements.lock.txt
+
+      # Datasets are gitignored because they are deterministic from their seed. Without this step
+      # the suite still passes -- 220 passed, 106 skipped -- and a green badge over a third of the
+      # suite silently skipped would be the exact failure this badge exists to rule out. Needs no
+      # network and no key.
+      - name: Generate the datasets
+        run: make seed
+
+      # No API key is set here, and that is the test: the suite must pass entirely from committed
+      # fixtures. A run that needs a credential is a run a judge cannot reproduce.
+      - name: Run the suite
+        run: make test

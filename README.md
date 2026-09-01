@@ -1,3 +1,5 @@
+[![tests](https://github.com/Rushikesh116/finctl/actions/workflows/test.yml/badge.svg)](https://github.com/Rushikesh116/finctl/actions/workflows/test.yml)
+
 # FinCtl
 
 | | |
