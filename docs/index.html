@@ -209,9 +209,12 @@ h2 {
 
 /* --- metrics strip ----------------------------------------------------------------------- */
 
+/* Three columns exactly, not auto-fit. There are six cells, and `auto-fit` resolved to five at
+   this width, leaving one cell alone on a second row beside four cells' worth of bare grid
+   background. A fixed 3x2 divides evenly. */
 .strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 1px;
   background: var(--hair);
   border: 1px solid var(--hair);
@@ -246,12 +249,20 @@ h2 {
 
 .cascade { display: flex; flex-direction: column; gap: .9rem; }
 
-.rung { display: grid; grid-template-columns: 12.5rem 1fr; gap: 1.25rem; align-items: center; }
+/* Three columns: label, bar, figures. The figures used to be overlaid on the bar with a
+   text-shadow meant to keep them legible over the fill, the track and both accents at once. A
+   screenshot showed it does not work -- dark text on the dark green fill is unreadable. Giving
+   the numbers their own column is legible unconditionally and needs no trick. */
+.rung {
+  display: grid;
+  grid-template-columns: 12.5rem 1fr 13rem;
+  gap: 1.25rem;
+  align-items: center;
+}
 .rung .lbl { font-size: .9rem; color: var(--ink); }
 .rung .lbl small { display: block; color: var(--muted); font-size: .74rem; margin-top: .15rem; }
 
 .track {
-  position: relative;
   background: var(--hair-2);
   border-radius: 3px;
   height: 1.9rem;
@@ -266,15 +277,11 @@ h2 {
 .rung.out .fill { background: var(--exception); }
 
 .rung .qty {
-  position: absolute;
-  left: .75rem;
   font-size: .8rem;
   color: var(--ink);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
-  /* The label sits on top of the fill, which can be either accent or the track behind it. A
-     shadow in the card colour keeps it legible over all three without a second colour. */
-  text-shadow: 0 0 4px var(--card), 0 0 4px var(--card), 0 0 3px var(--card);
+  white-space: nowrap;
 }
 .rung .qty .of { color: var(--muted); font-family: var(--sans); }
 
@@ -523,7 +530,7 @@ summary:focus:not(:focus-visible) { outline: none; }
   <header>
     <h1>Payment reconciliation</h1>
     <p class="tagline">Three records of the same money — what the shop sold, what the payment company processed, and what reached the bank — checked against each other, with everything that did not line up listed and explained.</p>
-    <p class="provenance"><span><b>Dataset</b> <span class='v'>dev_seed_11</span></span> <span><b>Data</b> <span class='v'>1115450f</span></span> <span><b>Code</b> <span class='v'>f1f7b06</span></span> <span><b>Run</b> <span class='v'>2026-09-01 13:19 UTC</span></span> <span><b>Wall clock</b> <span class='v'>295 ms</span></span> <span><b>Adjudicator</b> offline_stub gemini-3.7-flash (replay)</span> <span><b>Ledger</b> 42 entries, head <span class='v'>51b54deedc60</span></span></p>
+    <p class="provenance"><span><b>Dataset</b> <span class='v'>dev_seed_11</span></span> <span><b>Data</b> <span class='v'>1115450f</span></span> <span><b>Code</b> <span class='v'>f7154cf</span></span> <span><b>Run</b> <span class='v'>2026-09-01 15:14 UTC</span></span> <span><b>Wall clock</b> <span class='v'>277 ms</span></span> <span><b>Adjudicator</b> offline_stub gemini-3.7-flash (replay)</span> <span><b>Ledger</b> 42 entries, head <span class='v'>51b54deedc60</span></span></p>
     <p class="warn">Mixed adjudication: some Layer 4 responses in this run came from an offline stub rather than a model. The split, and why, is in <code>docs/METRICS.md</code>.</p>
   </header>
 
@@ -542,7 +549,7 @@ summary:focus:not(:focus-visible) { outline: none; }
   <section>
     <h2>How the work was done</h2>
     <p class="says">Four methods, tried in order, each one handed only what the methods before it could not settle.</p>
-    <div class="card"><div class="cascade"><div class="rung"><span class="lbl">Matched on reference<small>exact identity</small></span><span class="track"><span class="fill" style="width:100.00%"></span><span class="qty">558 arrived <span class="of">&middot; settled 325</span></span></span></div><div class="rung"><span class="lbl">Rebuilt the batch<small>net settlement reconstruction</small></span><span class="track"><span class="fill" style="width:41.76%"></span><span class="qty">233 arrived <span class="of">&middot; settled 73</span></span></span></div><div class="rung dead"><span class="lbl">Best global assignment<small>one-to-one, globally optimal</small></span><span class="track"><span class="fill" style="width:28.67%"></span><span class="qty">160 arrived <span class="of">&middot; settled none of them</span></span></span></div><div class="rung"><span class="lbl">Read the narration<small>model proposes, verifier approves</small></span><span class="track"><span class="fill" style="width:28.67%"></span><span class="qty">160 arrived <span class="of">&middot; settled 27</span></span></span></div><div class="rung out"><span class="lbl">Could not match<small>declined, with a reason</small></span><span class="track"><span class="fill" style="width:23.84%"></span><span class="qty">133 records <span class="of">&middot; 23.8% of the run</span></span></span></div></div></div>
+    <div class="card"><div class="cascade"><div class="rung"><span class="lbl">Matched on reference<small>exact identity</small></span><span class="track"><span class="fill" style="width:100.00%"></span></span><span class="qty">558 arrived <span class="of">&middot; settled 325</span></span></div><div class="rung"><span class="lbl">Rebuilt the batch<small>net settlement reconstruction</small></span><span class="track"><span class="fill" style="width:41.76%"></span></span><span class="qty">233 arrived <span class="of">&middot; settled 73</span></span></div><div class="rung dead"><span class="lbl">Best global assignment<small>one-to-one, globally optimal</small></span><span class="track"><span class="fill" style="width:28.67%"></span></span><span class="qty">160 arrived <span class="of">&middot; settled none of them</span></span></div><div class="rung"><span class="lbl">Read the narration<small>model proposes, verifier approves</small></span><span class="track"><span class="fill" style="width:28.67%"></span></span><span class="qty">160 arrived <span class="of">&middot; settled 27</span></span></div><div class="rung out"><span class="lbl">Could not match<small>declined, with a reason</small></span><span class="track"><span class="fill" style="width:23.84%"></span></span><span class="qty">133 records <span class="of">&middot; 23.8% of the run</span></span></div></div></div>
     <p class="caption">Each bar is how many records arrived at that step, so the bars narrow as the work gets done. A bar the same width as the one above it means that step settled nothing on this run — which is a fact about the method, not a drawing error.</p>
   </section>
 
@@ -560,11 +567,11 @@ summary:focus:not(:focus-visible) { outline: none; }
     <div class="card">
       <details class="raw">
         <summary>Full metrics, exactly as make eval prints them</summary>
-        <pre>Dataset: dev_seed_11  data 1115450f   SHA: f1f7b06   2026-09-01 13:19
+        <pre>Dataset: dev_seed_11  data 1115450f   SHA: f7154cf   2026-09-01 15:14
 Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
   ^ counts THIS RUN&#x27;s responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.
-Records processed         558          Wall clock    0.295s
-Auto-matched              425    76.2%   Throughput   1889 rec/s
+Records processed         558          Wall clock    0.278s
+Auto-matched              425    76.2%   Throughput   2009 rec/s
   Layer 1  exact            325    58.2%
   Layer 2  netting           73    13.1%
   Layer 3  fuzzy              0     0.0%
@@ -573,6 +580,14 @@ False matches               0    0.00%   &lt;- precision, not coverage
 Exceptions                133    23.8%    Rs 1,14,61,299.74 at risk
   correctly flagged        94    70.7%
   missed matches           39    29.3%
+Value in the run    Rs 8,77,64,133.83          &lt;- see &#x27;value denominator&#x27; below
+  value matched     Rs 6,91,46,021.36    78.8%
+  value unmatched   Rs 1,86,18,112.47    21.2%   the two sum to the total, exactly
+  value denominator: per record across all three sources, the same population the record rate uses.
+    One sale is counted up to three times -- as a ledger row, a gateway payment and inside a bank credit --
+    so this exceeds the money that moved. Per source: merchant Rs 2,66,64,589.00  gateway Rs 3,39,09,140.33  bank Rs 2,71,90,404.50
+  NB &#x27;at risk&#x27; above is Rs 1,14,61,299.74, which is NOT this figure: it sums each exception&#x27;s own
+    amount-at-risk (a batch&#x27;s expected credit, say), not the gross value of every record it names.
   by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
   by class: absent 56, undetermined 38
 LLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 responses from cache)
@@ -601,27 +616,29 @@ By pathology  (records carry &gt;=1, so these OVERLAP and do not sum to 558)
         <summary>Each method measured on its own — every row is a real run, not a subtraction</summary>
         <pre>
 Ablation (same dataset, layers enabled cumulatively)
-  arm                  auto-match   false-match   exceptions   UNCLASSIFIED
-  exact only (L1)          58.2%         0.00%          233             94
-  + netting (L2)           71.3%         0.00%          160              4   +13.1pp
-  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp
-  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp
+  arm                  auto-match   false-match   value matched   exceptions   UNCLASSIFIED
+  exact only (L1)          58.2%         0.00%           57.2%          233             94
+  + netting (L2)           71.3%         0.00%           73.4%          160              4   +13.1pp rec  +16.2pp val
+  + fuzzy (L3)             71.3%         0.00%           73.4%          160              0   +0.0pp rec  +0.0pp val
+  + LLM (L4)               76.2%         0.00%           78.8%          133              0   +4.8pp rec  +5.4pp val
   False-match rate is reported on every arm: an arm that raises coverage while also
-  raising false matches is a regression being sold as an improvement.</pre>
+  raising false matches is a regression being sold as an improvement.
+  Records and value are reported separately because a layer can buy a lot of one and
+  little of the other.</pre>
       </details>
     </div>
   </section>
 
-  <footer>425 of 558 records matched in 295 ms. Amounts are held as whole paise throughout and turned into rupees only here, at the point of display. Nothing on this page runs, and it requests nothing from the network.</footer>
+  <footer>425 of 558 records matched in 277 ms. Amounts are held as whole paise throughout and turned into rupees only here, at the point of display. Nothing on this page runs, and it requests nothing from the network.</footer>
 </main>
 <!-- Every number above is also here as JSON, so the page is machine-readable without scraping
      the markup. Nothing on this page executes: there is no script, no fetch, and no external
      reference of any kind. -->
 <script id="run-data" type="application/json">{
-  "ablation": "\nAblation (same dataset, layers enabled cumulatively)\n  arm                  auto-match   false-match   exceptions   UNCLASSIFIED\n  exact only (L1)          58.2%         0.00%          233             94\n  + netting (L2)           71.3%         0.00%          160              4   +13.1pp\n  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp\n  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp\n  False-match rate is reported on every arm: an arm that raises coverage while also\n  raising false matches is a regression being sold as an improvement.",
+  "ablation": "\nAblation (same dataset, layers enabled cumulatively)\n  arm                  auto-match   false-match   value matched   exceptions   UNCLASSIFIED\n  exact only (L1)          58.2%         0.00%           57.2%          233             94\n  + netting (L2)           71.3%         0.00%           73.4%          160              4   +13.1pp rec  +16.2pp val\n  + fuzzy (L3)             71.3%         0.00%           73.4%          160              0   +0.0pp rec  +0.0pp val\n  + LLM (L4)               76.2%         0.00%           78.8%          133              0   +4.8pp rec  +5.4pp val\n  False-match rate is reported on every arm: an arm that raises coverage while also\n  raising false matches is a regression being sold as an improvement.\n  Records and value are reported separately because a layer can buy a lot of one and\n  little of the other.",
   "at_risk_paise": 1146129974,
   "auto_matched": 425,
-  "block": "Dataset: dev_seed_11  data 1115450f   SHA: f1f7b06   2026-09-01 13:19\nAdjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)\n  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.\nRecords processed         558          Wall clock    0.295s\nAuto-matched              425    76.2%   Throughput   1889 rec/s\n  Layer 1  exact            325    58.2%\n  Layer 2  netting           73    13.1%\n  Layer 3  fuzzy              0     0.0%\n  Layer 4  LLM+verified      27     4.8%\nFalse matches               0    0.00%   <- precision, not coverage\nExceptions                133    23.8%    Rs 1,14,61,299.74 at risk\n  correctly flagged        94    70.7%\n  missed matches           39    29.3%\n  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1\n  by class: absent 56, undetermined 38\nLLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 responses from cache)\n  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold rate. The last cold attempt was terminated by provider quota exhaustion; see docs/METRICS.md.\n  by kind: none (all replayed from fixtures)   MODE=replay\nRules cache                 3 rules   2 promoted from narration the seeded regex missed\n  authored by: google-gemini/gemini-3.7-flash x1, offline_stub/gemini-3.7-flash x1\nAdjudication             0.0s   retries 0   backoff     0s   (1% of wall clock)\nCost / 1000            Rs TBD          USD 0.000000 total\nAudit ledger               42 entries   head 51b54deedc60\nBy mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)\n  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1\n  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0\n  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0\n  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0\nRefusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.\n  P7 record-level tie            8/8    records   100.0%\n  M5 batch subset ambiguity      2/2    batches   100.0%\nBy pathology  (records carry >=1, so these OVERLAP and do not sum to 558)\n  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24\n  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14",
+  "block": "Dataset: dev_seed_11  data 1115450f   SHA: f7154cf   2026-09-01 15:14\nAdjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)\n  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.\nRecords processed         558          Wall clock    0.278s\nAuto-matched              425    76.2%   Throughput   2009 rec/s\n  Layer 1  exact            325    58.2%\n  Layer 2  netting           73    13.1%\n  Layer 3  fuzzy              0     0.0%\n  Layer 4  LLM+verified      27     4.8%\nFalse matches               0    0.00%   <- precision, not coverage\nExceptions                133    23.8%    Rs 1,14,61,299.74 at risk\n  correctly flagged        94    70.7%\n  missed matches           39    29.3%\nValue in the run    Rs 8,77,64,133.83          <- see 'value denominator' below\n  value matched     Rs 6,91,46,021.36    78.8%\n  value unmatched   Rs 1,86,18,112.47    21.2%   the two sum to the total, exactly\n  value denominator: per record across all three sources, the same population the record rate uses.\n    One sale is counted up to three times -- as a ledger row, a gateway payment and inside a bank credit --\n    so this exceeds the money that moved. Per source: merchant Rs 2,66,64,589.00  gateway Rs 3,39,09,140.33  bank Rs 2,71,90,404.50\n  NB 'at risk' above is Rs 1,14,61,299.74, which is NOT this figure: it sums each exception's own\n    amount-at-risk (a batch's expected credit, say), not the gross value of every record it names.\n  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1\n  by class: absent 56, undetermined 38\nLLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 responses from cache)\n  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold rate. The last cold attempt was terminated by provider quota exhaustion; see docs/METRICS.md.\n  by kind: none (all replayed from fixtures)   MODE=replay\nRules cache                 3 rules   2 promoted from narration the seeded regex missed\n  authored by: google-gemini/gemini-3.7-flash x1, offline_stub/gemini-3.7-flash x1\nAdjudication             0.0s   retries 0   backoff     0s   (1% of wall clock)\nCost / 1000            Rs TBD          USD 0.000000 total\nAudit ledger               42 entries   head 51b54deedc60\nBy mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)\n  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1\n  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0\n  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0\n  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0\n  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0\nRefusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.\n  P7 record-level tie            8/8    records   100.0%\n  M5 batch subset ambiguity      2/2    batches   100.0%\nBy pathology  (records carry >=1, so these OVERLAP and do not sum to 558)\n  P1   502/541  P2    57/66   P3    18/18   P4     3/3    P5     4/4    P6    24/24\n  P7     8/8    P8    24/24   P9    50/50   P10   30/30   P11    2/2    P12   12/14",
   "by_class": {
     "absent": 56,
     "undetermined": 38
@@ -1455,9 +1472,9 @@ Ablation (same dataset, layers enabled cumulatively)
   },
   "provenance": {
     "dataset_sha": "1115450f",
-    "git_sha": "f1f7b06",
+    "git_sha": "f7154cf",
     "manifest_state": "match",
-    "started_at_utc": "2026-09-01 13:19",
+    "started_at_utc": "2026-09-01 15:14",
     "trustworthy": true
   },
   "record_digest": {
@@ -3261,7 +3278,7 @@ Ablation (same dataset, layers enabled cumulatively)
     "merchant_sales": 225
   },
   "unclassified": 0,
-  "wall_clock_ms": 295,
+  "wall_clock_ms": 277,
   "worked_example": {
     "credit_paise": 113604336,
     "joined_paise": 56679532,

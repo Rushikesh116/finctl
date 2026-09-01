@@ -201,9 +201,12 @@ h2 {
 
 /* --- metrics strip ----------------------------------------------------------------------- */
 
+/* Three columns exactly, not auto-fit. There are six cells, and `auto-fit` resolved to five at
+   this width, leaving one cell alone on a second row beside four cells' worth of bare grid
+   background. A fixed 3x2 divides evenly. */
 .strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
+  grid-template-columns: repeat(3, 1fr);
   gap: 1px;
   background: var(--hair);
   border: 1px solid var(--hair);
@@ -238,12 +241,20 @@ h2 {
 
 .cascade { display: flex; flex-direction: column; gap: .9rem; }
 
-.rung { display: grid; grid-template-columns: 12.5rem 1fr; gap: 1.25rem; align-items: center; }
+/* Three columns: label, bar, figures. The figures used to be overlaid on the bar with a
+   text-shadow meant to keep them legible over the fill, the track and both accents at once. A
+   screenshot showed it does not work -- dark text on the dark green fill is unreadable. Giving
+   the numbers their own column is legible unconditionally and needs no trick. */
+.rung {
+  display: grid;
+  grid-template-columns: 12.5rem 1fr 13rem;
+  gap: 1.25rem;
+  align-items: center;
+}
 .rung .lbl { font-size: .9rem; color: var(--ink); }
 .rung .lbl small { display: block; color: var(--muted); font-size: .74rem; margin-top: .15rem; }
 
 .track {
-  position: relative;
   background: var(--hair-2);
   border-radius: 3px;
   height: 1.9rem;
@@ -258,15 +269,11 @@ h2 {
 .rung.out .fill { background: var(--exception); }
 
 .rung .qty {
-  position: absolute;
-  left: .75rem;
   font-size: .8rem;
   color: var(--ink);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
-  /* The label sits on top of the fill, which can be either accent or the track behind it. A
-     shadow in the card colour keeps it legible over all three without a second colour. */
-  text-shadow: 0 0 4px var(--card), 0 0 4px var(--card), 0 0 3px var(--card);
+  white-space: nowrap;
 }
 .rung .qty .of { color: var(--muted); font-family: var(--sans); }
 

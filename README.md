@@ -10,6 +10,22 @@
 Free tier, so the first request after an idle period cold-starts. The static report is the
 zero-infrastructure fallback: if the service is asleep, the numbers are still readable.
 
+[![The FinCtl report page: a worked example showing one Rs 11,36,043.36 bank credit explained by
+eight rows, the headline metrics, and the four-method cascade](docs/img/report.png)](https://rushikesh116.github.io/finctl/)
+
+## Three findings
+
+**1.** The model reported **confidence 95** on a regex that was safe *and* on one that would have
+poisoned the rules cache permanently — the gate did all the discriminating, and any design gating
+on confidence would have cached both. → [AI judgment](#ai-judgment)
+
+**2.** The promotion gate **rejected real model output**, in the exact shape a hand-written test
+predicted before any API key existed. → [The gate rejecting real model output](#the-gate-rejecting-real-model-output)
+
+**3.** **Five separate tests passed while asserting the wrong thing.** That is the dominant failure
+mode of this project — more common than any bug in the reconciliation logic — and the proxy table
+is the finding. → [What broke](#what-broke)
+
 ```bash
 make setup
 make demo     # seed + run + eval + report, from clean, with no API key set
@@ -87,14 +103,10 @@ Measured on `dev_seed_11`, 558 records. Pasted from `make eval` — no number in
 typed by hand.
 
 ```
-Dataset: dev_seed_11  data 1115450f   SHA: 881f752   2026-08-27 15:07
-Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
-  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations
-    now resolve via the promoted regex, so their fixtures are never consulted and the model does
-    not appear above. Its contribution moved from the response cache into the rules cache, which
-    is what promotion is for.
-Records processed         558          Wall clock    0.267s
-Auto-matched              425    76.2%   Throughput   2090 rec/s
+Dataset: dev_seed_11  data 1115450f   SHA: f7154cf   2026-09-01 15:08
+Adjudicator: gemini-3.7-flash (replay)   -- fixtures are MIXED real/stub, see 'AI judgment' below
+Records processed         558          Wall clock    0.284s
+Auto-matched              425    76.2%   Throughput   1961 rec/s
   Layer 1  exact            325    58.2%
   Layer 2  netting           73    13.1%
   Layer 3  fuzzy              0     0.0%
@@ -103,23 +115,32 @@ False matches               0    0.00%   <- precision, not coverage
 Exceptions                133    23.8%    Rs 1,14,61,299.74 at risk
   correctly flagged        94    70.7%
   missed matches           39    29.3%
-  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32,
-           UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
+Value in the run    Rs 8,77,64,133.83          <- see 'value denominator' below
+  value matched     Rs 6,91,46,021.36    78.8%
+  value unmatched   Rs 1,86,18,112.47    21.2%   the two sum to the total, exactly
+  value denominator: per record across all three sources, the same population the record rate uses.
+    One sale is counted up to three times -- as a ledger row, a gateway payment and inside a bank credit --
+    so this exceeds the money that moved. Per source: merchant Rs 2,66,64,589.00  gateway Rs 3,39,09,140.33  bank Rs 2,71,90,404.50
+  NB 'at risk' above is Rs 1,14,61,299.74, which is NOT this figure: it sums each exception's own
+    amount-at-risk (a batch's expected credit, say), not the gross value of every record it names.
+  by type: TIMING_OUTSIDE_WINDOW 44, AMBIGUOUS 43, MISSING_BANK_ROW 32, UNPARSEABLE_NARRATION 32, SUBSET_SEARCH_EXHAUSTED 13, MISSING_GATEWAY_ROW 1
   by class: absent 56, undetermined 38
-LLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 from cache)
-  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold
-    rate. The last cold attempt was terminated by provider quota exhaustion.
+LLM calls                   0   cache hits    6   Calls / 100  0.00 (replay: all 6 responses from cache)
+  cold calls / 100: not measured -- this run replayed from cache, so it cannot report a cold rate. The last cold attempt was terminated by provider quota exhaustion; see docs/METRICS.md.
+  by kind: none (all replayed from fixtures)   MODE=replay
 Rules cache                 3 rules   2 promoted from narration the seeded regex missed
   authored by: google-gemini/gemini-3.7-flash x1, offline_stub/gemini-3.7-flash x1
+Adjudication             0.0s   retries 0   backoff     0s   (1% of wall clock)
+Cost / 1000            Rs TBD          USD 0.000000 total
 Audit ledger               42 entries   head 51b54deedc60
-By mechanism  (delta != 0 batches; refused is a SUCCESS, exhausted is an honest failure)
-  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0
-  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0
-  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0
-  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0
-  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0
-  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1
-Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose)
+By mechanism  (delta != 0 batches; ground-truth attribution. refused is a SUCCESS, exhausted is an honest failure)
+  credit_without_parseable_utr       4 batches  resolved 3  refused 0  exhausted 0  unclassified 0  MISSING_BANK_ROW 1
+  duplicate_reference_contamination  2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  export_cutoff_skew                 3 batches  resolved 3  refused 0  exhausted 0  unclassified 0
+  multiple_subsets_explain_delta     2 batches  resolved 0  refused 2  exhausted 0  unclassified 0
+  on_hold_release_misdated           2 batches  resolved 2  refused 0  exhausted 0  unclassified 0
+  pool_beyond_node_budget            1 batch    resolved 0  refused 0  exhausted 1  unclassified 0
+Refusals  (declining is a SUCCESS. Two distinct kinds, kept separate on purpose - they were conflated once). STRICTER than the by-pathology row below: that asks whether the engine avoided a wrong answer, this asks whether it gave the right answer for the right reason - a declared AMBIGUOUS, not merely an absence.
   P7 record-level tie            8/8    records   100.0%
   M5 batch subset ambiguity      2/2    batches   100.0%
 By pathology  (records carry >=1, so these OVERLAP and do not sum to 558)
@@ -130,25 +151,61 @@ By pathology  (records carry >=1, so these OVERLAP and do not sum to 558)
 Each ablation arm is a **real run** on the same dataset, not a subtraction:
 
 ```
-  arm                  auto-match   false-match   exceptions   UNCLASSIFIED
-  exact only (L1)          58.2%         0.00%          233             94
-  + netting (L2)           71.3%         0.00%          160              4   +13.1pp
-  + fuzzy (L3)             71.3%         0.00%          160              0   +0.0pp
-  + LLM (L4)               76.2%         0.00%          133              0   +4.8pp
+Ablation (same dataset, layers enabled cumulatively)
+  arm                  auto-match   false-match   value matched   exceptions   UNCLASSIFIED
+  exact only (L1)          58.2%         0.00%           57.2%          233             94
+  + netting (L2)           71.3%         0.00%           73.4%          160              4   +13.1pp rec  +16.2pp val
+  + fuzzy (L3)             71.3%         0.00%           73.4%          160              0   +0.0pp rec  +0.0pp val
+  + LLM (L4)               76.2%         0.00%           78.8%          133              0   +4.8pp rec  +5.4pp val
+  False-match rate is reported on every arm: an arm that raises coverage while also
+  raising false matches is a regression being sold as an improvement.
+  Records and value are reported separately because a layer can buy a lot of one and
+  little of the other.
 ```
 
 The false-match rate is on every arm deliberately: an arm that raises coverage while also raising
 false matches is a regression being sold as an improvement.
 
-Three things in that table are worth reading as results rather than as noise:
+Four things in that table are worth reading as results rather than as noise:
 
-- **Layer 3 contributes 0.0pp.** The globally-optimal assignment layer resolves nothing on this
-  dataset. It is reported at zero rather than quietly removed, and the UI draws its bar at the same
-  width as the layer above it.
+- **Layer 3 is the false-match containment layer, and it held at 0.00%.** It is the one place a
+  wrong match could enter: it pairs merchant-ledger rows to gateway payments with *no bank credit
+  in the relation*, so the obvious implementation approves on cost, which is not arithmetic. The
+  before/after on the same dataset SHA — **0.00% → 0.00%** — is what the layer is for and what it
+  bought. Its coverage contribution on this dataset is **0.0pp**; the layer is reported at zero
+  rather than quietly removed, and the page draws its bar at the same width as the one above it.
+- **Netting buys more value than records.** +13.1pp of records but **+16.2pp of value**: the batch
+  reconstruction is resolving the large items, which a record-only table would hide entirely.
 - **`SUBSET_SEARCH_EXHAUSTED 13`** is the bounded search visibly giving up. The track asks for a
   stopping rule; this is it firing, on one batch whose pool exceeds the node budget.
 - **`missed matches 39`** — 29.3% of exceptions are records that *could* have been matched. That is
   the honest cost of a zero-tolerance verifier and margin-zero refusal.
+
+### Date-window sweep — diagnostic only, not used for selection
+
+`D-0023` pre-registers that a sensitivity sweep may be reported as a diagnostic and never as a
+reason to retune against dev. Running it over the Layer 3 date window, shipped setting **7 days**:
+
+```
+  window     L3 resolved    false-match    TIMING_OUT    auto-match
+  7 days               0          0.00%           44        76.2%
+  14 days              0          0.00%           44        76.2%
+  30 days              0          0.00%           44        76.2%
+  60 days              0          0.00%           44        76.2%
+  120 days             0          0.00%           44        76.2%
+```
+
+**Nothing moves at any setting, and the reason is more useful than the table.** The 44
+`TIMING_OUTSIDE_WINDOW` exceptions are not produced by this window at all. They come from the
+pending-writeback sweep: gateway rows carrying no settlement assignment that *no in-period batch
+needed*, because their settlement falls outside the period the export covers. No date window can
+resolve them — the counterpart is not in the file. Widening the window to 120 days changes nothing
+because Layer 3 also resolves nothing at any width on this dataset.
+
+Two findings for the limitations section rather than a licence to tune: the window is **inert on
+this data**, so its shipped value of 7 is untested by evidence rather than justified by it; and
+`TIMING_OUTSIDE_WINDOW` would be better named for what it is, which is *settles in a later export
+period*. **The shipped setting is unchanged.**
 
 ---
 

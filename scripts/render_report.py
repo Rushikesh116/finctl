@@ -175,9 +175,10 @@ def _cascade(run: dict) -> str:
             f'<span class="lbl">{_esc(name)}<small>{_esc(mechanism)}</small></span>'
             f'<span class="track">'
             f'<span class="fill" style="width:{100 * arrived / n:.2f}%"></span>'
+            f"</span>"
             f'<span class="qty">{arrived:,} arrived <span class="of">&middot; '
             f'{_esc(detail)}</span></span>'
-            f"</span></div>"
+            f"</div>"
         )
 
     unresolved = run["exceptions"]
@@ -186,9 +187,10 @@ def _cascade(run: dict) -> str:
         f'<span class="lbl">Could not match<small>declined, with a reason</small></span>'
         f'<span class="track">'
         f'<span class="fill" style="width:{100 * unresolved / n:.2f}%"></span>'
+        f"</span>"
         f'<span class="qty">{unresolved:,} records <span class="of">&middot; '
         f"{_pct(unresolved, n)} of the run</span></span>"
-        f"</span></div>"
+        f"</div>"
     )
     return "".join(rungs)
 
