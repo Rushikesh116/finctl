@@ -162,6 +162,45 @@ movement **once**. Where one exception spans records in several sources describi
 movement, the gateway amount is authoritative. Summing all three sources triple-counts and
 inflates the figure by roughly 3×; a reviewer will spot that immediately.
 
+### Value-weighted match rate — and its denominator
+
+Records matched is not value matched. A payments team reads the second, and a system that
+settles many small records while leaving the large ones in the queue looks fine on the first
+metric and is not fine.
+
+**Denominator: the summed value of every record in the run, across all three sources.** The
+same population the record rate uses.
+
+That convention has a consequence which must be stated wherever the figure appears: **one
+economic sale is counted up to three times** — as a merchant ledger row, as a gateway payment,
+and inside a bank credit — so `total value` is roughly 3× the money that actually moved. It is
+chosen anyway, because the alternative is worse: a single-source denominator would make the
+value rate and the record rate describe different populations, and `76.2% of records, 78.8% of
+value` would then be two numbers that cannot be compared. The per-source subtotals are printed
+alongside so the economic figure is recoverable.
+
+**One record's value is its gross movement**, `credit + debit`, in integer paise:
+
+* **Gross, not net.** Netting the fee and its GST would make a record's value depend on how it
+  was later grouped, so the denominator would shift when the matcher changed.
+* **Magnitude, not sign.** A refund is value to reconcile, not negative value. Signing it would
+  let a refund cancel a payment, shrink the denominator, and flatter every rate computed
+  against it.
+
+**This is not the same figure as `rupees at risk`, and the block says so explicitly.** At-risk
+sums each exception's own declared amount — a batch's expected credit, say — while value
+unmatched sums the gross value of every record that exception names. Printing them as if they
+were one number would be a category error.
+
+**Asserted with two independent checks**, exactly as the record partition is, and for the same
+reason (`WHAT_BROKE.md` instance 2): `value matched + value unmatched == total value` exactly,
+**and** a separate check that every accounted record carries a value entry. The sum alone cannot
+distinguish a correct partition from one record valued at zero against another double-counted;
+the second check cannot see an arithmetic slip. Neither subsumes the other.
+
+The ablation table reports value per arm beside records, because a layer can buy many small
+records or few large ones and one column cannot show both.
+
 ## 5. The metrics block
 
 `make eval` prints exactly this shape, and this exact text is what gets pasted into

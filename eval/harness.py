@@ -90,6 +90,12 @@ class Metrics:
     by_type: dict[str, int] = field(default_factory=dict)
     by_class: dict[str, int] = field(default_factory=dict)
     at_risk_paise: int = 0
+    # The money-weighted view. Records matched is not value matched, and a payments team thinks
+    # in the second. Denominator convention is documented on `_record_values`.
+    total_value_paise: int = 0
+    value_matched_paise: int = 0
+    value_exceptions_paise: int = 0
+    value_by_source_paise: dict[str, int] = field(default_factory=dict)
     per_pathology: dict[int, tuple[int, int]] = field(default_factory=dict)
     llm_calls: int = 0
     llm_cache_hits: int = 0
@@ -469,7 +475,9 @@ def evaluate(
     elapsed_us = int((time.perf_counter() - started) * 1_000_000)
 
     truth = load_ground_truth(paths["labels"])
-    metrics = _score(dataset_name, provenance, data.record_count, elapsed_us, result, truth)
+    metrics = _score(
+        dataset_name, provenance, data, data.record_count, elapsed_us, result, truth
+    )
 
     if proposer is not None:
         metrics.llm_calls = proposer.stats.calls
@@ -512,6 +520,44 @@ def evaluate(
     metrics.source_counts = _source_counts(data)
 
     return metrics
+
+
+def record_value_paise(row: object) -> int:
+    """What one record is worth, in integer paise.
+
+    Gross movement, not net contribution: a gateway payment of Rs 1,40,254 against which a fee and
+    its GST are charged is a Rs 1,40,254 record. The fee is a deduction applied when the batch is
+    assembled, not a separate thing to reconcile, and netting it here would make the value of a
+    record depend on how it was later grouped.
+
+    Direction is discarded — a debit of Rs 100 is Rs 100 of value to reconcile, not minus Rs 100.
+    Signing it would let a refund cancel out a payment and shrink the denominator, which would
+    quietly flatter every rate computed against it.
+    """
+    for attribute in ("amount_paise",):  # merchant ledger rows carry a single signed-free amount
+        if hasattr(row, attribute):
+            return int(getattr(row, attribute))
+    return int(getattr(row, "credit_paise", 0)) + int(getattr(row, "debit_paise", 0))
+
+
+def _record_values(data: NormalizedDataset) -> dict[str, int]:
+    """Every record's value, keyed by row id.
+
+    **Denominator convention, stated because it is easy to misread.** This sums *per record*
+    across all three sources, exactly as the record count does. One economic sale therefore
+    contributes up to three times — once as a ledger row, once as a gateway payment, once inside a
+    bank credit — so the total is roughly three times the money that actually moved. That is
+    deliberate: the record rate and the value rate must be computed over the same population or
+    they cannot be compared, and "76.2% of records but 61% of value" is only meaningful if both
+    denominators describe the same thing.
+
+    The per-source totals are reported alongside so a reader can recover the economic figure.
+    """
+    values: dict[str, int] = {}
+    for rows in (data.merchant_rows, data.gateway_rows, data.bank_rows):
+        for row in rows:
+            values[row.row_id] = record_value_paise(row)
+    return values
 
 
 def _source_counts(data: NormalizedDataset) -> dict[str, int]:
@@ -727,6 +773,7 @@ def _write_ledger(
 def _score(
     dataset_name: str,
     provenance: RunProvenance,
+    data: NormalizedDataset,
     record_count: int,
     elapsed_us: int,
     result: identity.LayerResult,
@@ -803,6 +850,41 @@ def _score(
             f"{metrics.exception_records} = {total}, but N = {metrics.n}. "
             f"{abs(metrics.n - total)} records are unaccounted for, so every rate in this "
             "block would be computed over a subset it did not disclose."
+        )
+
+    # --- the value partition ------------------------------------------------------------
+    # Same two-check discipline as the record partition, for the same reason (WHAT_BROKE
+    # instance 2). The sum alone cannot distinguish "every record valued correctly" from "one
+    # record valued at zero and another double-counted", and the disjointness check above cannot
+    # see a record whose value simply failed to look up. Neither check subsumes the other.
+    values = _record_values(data)
+
+    accounted = set(engine_group) | set(seen_exceptions)
+    unvalued = sorted(accounted - values.keys())
+    if unvalued:
+        raise RuntimeError(
+            f"value partition violated: {len(unvalued)} records carry no value, e.g. "
+            f"{unvalued[:5]}. A record valued at nothing silently shrinks the numerator and the "
+            "denominator together, which leaves every rate looking correct."
+        )
+
+    metrics.total_value_paise = sum(values.values())
+    metrics.value_matched_paise = sum(values[row_id] for row_id in engine_group)
+    metrics.value_exceptions_paise = sum(values[row_id] for row_id in seen_exceptions)
+    metrics.value_by_source_paise = {
+        "merchant": sum(record_value_paise(r) for r in data.merchant_rows),
+        "gateway": sum(record_value_paise(r) for r in data.gateway_rows),
+        "bank": sum(record_value_paise(r) for r in data.bank_rows),
+    }
+
+    value_total = metrics.value_matched_paise + metrics.value_exceptions_paise
+    if value_total != metrics.total_value_paise:
+        raise RuntimeError(
+            f"value partition violated: matched {metrics.value_matched_paise} + exceptions "
+            f"{metrics.value_exceptions_paise} = {value_total}, but the run's total value is "
+            f"{metrics.total_value_paise}. A gap of "
+            f"{abs(metrics.total_value_paise - value_total)} paise means the money-weighted "
+            "rate is computed over a population that is not the run."
         )
 
     metrics.unclassified_records = metrics.by_type.get(identity.EX_UNCLASSIFIED, 0)
@@ -933,6 +1015,29 @@ def render(metrics: Metrics) -> str:
         f"{_percent(metrics.correctly_flagged, metrics.exception_records):>6}",
         f"  missed matches   {metrics.missed_matches:>10}   "
         f"{_percent(metrics.missed_matches, metrics.exception_records):>6}",
+        # The money-weighted view, printed beside the record view because they are not the same
+        # number and a payments team reads the second one. These two lines sum to the total by
+        # construction, and the harness raises if they ever do not.
+        f"Value in the run   {format_rupees(metrics.total_value_paise, prefix='Rs '):>18}"
+        f"          <- see 'value denominator' below",
+        f"  value matched    {format_rupees(metrics.value_matched_paise, prefix='Rs '):>18}   "
+        f"{_percent(metrics.value_matched_paise, metrics.total_value_paise):>6}",
+        f"  value unmatched  {format_rupees(metrics.value_exceptions_paise, prefix='Rs '):>18}   "
+        f"{_percent(metrics.value_exceptions_paise, metrics.total_value_paise):>6}   "
+        f"the two sum to the total, exactly",
+        "  value denominator: per record across all three sources, the same population the "
+        "record rate uses.",
+        "    One sale is counted up to three times -- as a ledger row, a gateway payment and "
+        "inside a bank credit --",
+        "    so this exceeds the money that moved. Per source: "
+        + "  ".join(
+            f"{name} {format_rupees(value, prefix='Rs ')}"
+            for name, value in metrics.value_by_source_paise.items()
+        ),
+        f"  NB 'at risk' above is {format_rupees(metrics.at_risk_paise, prefix='Rs ')}, which is "
+        f"NOT this figure: it sums each exception's own",
+        "    amount-at-risk (a batch's expected credit, say), not the gross value of every "
+        "record it names.",
         "  by type: "
         + ", ".join(f"{k} {v}" for k, v in sorted(metrics.by_type.items(), key=lambda kv: -kv[1])),
         "  by class: "
@@ -1045,30 +1150,46 @@ def render_ablation(dataset_name: str) -> str:
     lines = [
         "",
         "Ablation (same dataset, layers enabled cumulatively)",
-        "  arm                  auto-match   false-match   exceptions   UNCLASSIFIED",
+        "  arm                  auto-match   false-match   value matched   exceptions   UNCLASSIFIED",
     ]
     previous: Metrics | None = None
     for ceiling, label in ABLATION_ARMS:
         arm = evaluate(dataset_name, max_layer=ceiling)
         delta = ""
         if previous is not None:
-            change = 100 * (arm.auto_matched - previous.auto_matched) / arm.n
-            delta = f"   {change:+.1f}pp"
+            # Both deltas, because a layer can buy records and value at very different rates --
+            # a layer that resolves many small records looks strong on one and weak on the other,
+            # and reporting only the flattering one is the whole failure this table guards.
+            records_change = 100 * (arm.auto_matched - previous.auto_matched) / arm.n
+            value_change = (
+                100
+                * (arm.value_matched_paise - previous.value_matched_paise)
+                / arm.total_value_paise
+                if arm.total_value_paise
+                else 0.0
+            )
+            delta = f"   {records_change:+.1f}pp rec  {value_change:+.1f}pp val"
         lines.append(
             f"  {label:<20}{_percent(arm.auto_matched, arm.n):>10}   "
             f"{_percent(arm.false_matches, arm.auto_matched, 2):>11}   "
+            f"{_percent(arm.value_matched_paise, arm.total_value_paise):>13}   "
             f"{arm.exception_records:>10}   {arm.unclassified_records:>12}{delta}"
         )
         previous = arm
     for layer, name in sorted(PLANNED_LAYERS.items()):
         label = f"+ {name} (L{layer})"
         lines.append(
-            f"  {label:<20}{'--':>10}   {'--':>11}   {'--':>10}   {'--':>12}   not built"
+            f"  {label:<20}{'--':>10}   {'--':>11}   {'--':>13}   {'--':>10}   {'--':>12}   "
+            "not built"
         )
     lines.append(
         "  False-match rate is reported on every arm: an arm that raises coverage while also"
     )
     lines.append("  raising false matches is a regression being sold as an improvement.")
+    lines.append(
+        "  Records and value are reported separately because a layer can buy a lot of one and"
+    )
+    lines.append("  little of the other.")
     return "\n".join(lines)
 
 

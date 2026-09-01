@@ -11,6 +11,8 @@ from __future__ import annotations
 import pytest
 
 from core import identity, results
+from core.normalize import NormalizedDataset
+from core.records import GatewayRow
 from eval import harness
 from eval.groundtruth import GroundTruth
 from eval.provenance import capture
@@ -50,7 +52,7 @@ def test_the_partition_invariant_raises_when_violated() -> None:
     result.groups.pop()
 
     with pytest.raises(RuntimeError, match="partition invariant violated"):
-        harness._score(DEV, capture(DEV), data.record_count, 1000, result, truth)
+        harness._score(DEV, capture(DEV), data, data.record_count, 1000, result, truth)
 
 
 def test_the_false_match_detector_actually_detects_a_false_match() -> None:
@@ -70,7 +72,7 @@ def test_the_false_match_detector_actually_detects_a_false_match() -> None:
 
     baseline = identity.resolve(data)
     harness.absorb_unresolved(data, baseline)
-    clean = harness._score(DEV, capture(DEV), data.record_count, 1000, baseline, truth)
+    clean = harness._score(DEV, capture(DEV), data, data.record_count, 1000, baseline, truth)
     assert clean.false_matches == 0, "baseline changed; re-derive this test"
 
     # Now a clean corruption: drop a member and account for it as an exception, so the
@@ -98,7 +100,7 @@ def test_the_false_match_detector_actually_detects_a_false_match() -> None:
         )
     )
 
-    scored = harness._score(DEV, capture(DEV), data.record_count, 1000, corrupted, truth)
+    scored = harness._score(DEV, capture(DEV), data, data.record_count, 1000, corrupted, truth)
 
     assert scored.false_matches > 0, (
         "a group missing a member scored as correct, so set equality is not being applied "
@@ -148,7 +150,7 @@ def test_a_record_cannot_be_both_matched_and_excepted() -> None:
     )
 
     with pytest.raises(RuntimeError, match="both matched and excepted"):
-        harness._score(DEV, capture(DEV), data.record_count, 1000, corrupted, truth)
+        harness._score(DEV, capture(DEV), data, data.record_count, 1000, corrupted, truth)
 
 
 def test_matching_an_unmatchable_record_counts_as_a_false_match() -> None:
@@ -168,7 +170,24 @@ def test_matching_an_unmatchable_record_counts_as_a_false_match() -> None:
             )
         ]
     )
-    metrics = harness._score("synthetic", capture(DEV), 1, 1000, result, truth)
+    empty = NormalizedDataset(
+        merchant_rows=[],
+        gateway_rows=[
+            GatewayRow(
+                row_id="gw_1",
+                type="payment",
+                entity_id="pay_1",
+                debit_paise=0,
+                credit_paise=1_000,
+                fee_base_paise=0,
+                gst_paise=0,
+                currency="INR",
+                created_at_utc=1_700_000_000,
+            )
+        ],
+        bank_rows=[],
+    )
+    metrics = harness._score("synthetic", capture(DEV), empty, 1, 1000, result, truth)
 
     assert metrics.auto_matched == 1
     assert metrics.false_matches == 1
@@ -307,3 +326,107 @@ def test_a_nonzero_unclassified_count_is_printed_as_a_finding() -> None:
     rendered = harness.render(metrics)
     assert "FINDING" in rendered
     assert "Target" in rendered, "the finding must state what the target is"
+
+
+# --- the money-weighted rate ----------------------------------------------------------------
+#
+# Records matched is not value matched, and a payments team reads the second. The partition is
+# asserted the same way the record partition is: a sum AND an independent check, because instance
+# 2 in WHAT_BROKE.md is a sum that reconciled over a set wrong in two directions at once.
+
+
+def test_value_partition_sums_exactly() -> None:
+    """Integer paise, so this is equality and not a tolerance."""
+    metrics = harness.evaluate(DEV)
+
+    assert metrics.total_value_paise > 0
+    assert (
+        metrics.value_matched_paise + metrics.value_exceptions_paise == metrics.total_value_paise
+    )
+
+
+def test_value_partition_is_checked_independently_of_its_sum() -> None:
+    """The sum cannot see a record valued twice against one valued at zero.
+
+    Two records swapped in that way leave the total untouched, so the guard has to be something
+    other than the total. Here it is the unvalued-record check plus record disjointness.
+    """
+    metrics = harness.evaluate(DEV)
+
+    # Every accounted record carries a value: nothing silently contributes zero to both sides.
+    from core.normalize import load_dataset
+    from data.generator import dataset_paths
+
+    paths = dataset_paths(DEV)
+    data = load_dataset(
+        merchant=paths["merchant"], gateway=paths["gateway"], bank=paths["bank"]
+    )
+    values = harness._record_values(data)
+
+    assert len(values) == metrics.n, "a record has no value entry"
+    assert all(v >= 0 for v in values.values()), "a record is valued negatively"
+    assert sum(values.values()) == metrics.total_value_paise
+
+
+def test_value_is_gross_movement_not_net_contribution() -> None:
+    """Netting the fee here would make a record's value depend on how it was later grouped."""
+    from core.records import GatewayRow
+
+    row = GatewayRow(
+        row_id="gw_x",
+        type="payment",
+        entity_id="pay_x",
+        debit_paise=0,
+        credit_paise=100_000,
+        fee_base_paise=2_000,
+        gst_paise=360,
+        currency="INR",
+        created_at_utc=1_700_000_000,
+    )
+    assert harness.record_value_paise(row) == 100_000
+    assert row.net_paise == 97_640, "net is a different figure, and it is not what we report"
+
+
+def test_a_debit_contributes_its_magnitude_not_a_negative() -> None:
+    """Signing it would let a refund cancel a payment and shrink the denominator."""
+    from core.records import BankRow
+
+    debit = BankRow(
+        row_id="bk_x",
+        value_date_ist="2026-03-27",
+        narration="REVERSAL",
+        reference="",
+        credit_paise=0,
+        debit_paise=50_000,
+    )
+    assert harness.record_value_paise(debit) == 50_000
+
+
+def test_value_rate_and_record_rate_share_a_denominator_population() -> None:
+    """Otherwise the two percentages are not comparable, which is the whole point of printing both."""
+    metrics = harness.evaluate(DEV)
+
+    per_source = metrics.value_by_source_paise
+    assert sum(per_source.values()) == metrics.total_value_paise
+    assert set(per_source) == {"merchant", "gateway", "bank"}
+
+
+def test_the_block_prints_value_and_explains_its_denominator() -> None:
+    """A value figure without its denominator convention is unreadable, and this one is unusual."""
+    rendered = harness.render(harness.evaluate(DEV))
+
+    assert "Value in the run" in rendered
+    assert "value matched" in rendered
+    assert "value unmatched" in rendered
+    assert "value denominator" in rendered
+    assert "counted up to three times" in rendered, "the triple-count is not disclosed"
+    # 'at risk' and 'value unmatched' are different measures and must not read as the same one.
+    assert "NOT this figure" in rendered
+
+
+def test_the_ablation_reports_value_per_arm() -> None:
+    """A layer can buy many small records or few large ones; one column cannot show both."""
+    table = harness.render_ablation(DEV)
+
+    assert "value matched" in table
+    assert "pp val" in table and "pp rec" in table
