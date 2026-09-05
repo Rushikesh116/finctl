@@ -180,6 +180,52 @@ it has now caught a real bug twice.
 
 ---
 
+## 2026-09-05 — a pasted metrics block was hand-edited, and the caveat shrank
+
+**Symptom.** `README.md` → Results carried the line
+
+```
+Adjudicator: gemini-3.7-flash (replay)   -- fixtures are MIXED real/stub, see 'AI judgment' below
+```
+
+directly under a heading reading *"Pasted from `make eval` — no number in this repository is
+typed by hand."* The harness has never printed that line. What it actually prints is
+
+```
+Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
+  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; ...
+```
+
+**Diagnosis.** `git show f7154cf:README.md` carries the real banner; commit `7830e2c`
+("README: move the stub banner, reframe Layer 3, restructure the opening") replaced it with the
+softer sentence and dropped the adjacent explanatory note entirely. The intent was reasonable —
+move the discussion of stubbing into the section that discusses stubbing — but the edit was made
+**inside a fenced block that the surrounding prose claims is verbatim command output**. Two
+things went wrong at once:
+
+1. The block stopped being a paste while still being presented as one. That is the same failure
+   the byte-identity test (`test_readme_code_blocks_are_byte_identical_to_their_source`) was
+   written to catch for two *other* quoted blocks — this one was not covered.
+2. The caveat **shrank**. `!! STUBBED PROPOSER, not a model` became `fixtures are MIXED
+   real/stub`, and the note explaining why a real model's rule no longer appears in the response
+   counts was deleted rather than moved. A disclosure that gets softer on its way to the section
+   that is supposed to own it has not moved; it has been reduced.
+
+The direction of the error is what makes it worth logging. Nothing here was fabricated and no
+number changed. The edit made the project look *slightly better* than the command output said it
+was, in the one place the document promises it has not done that.
+
+**Fix.** The block is re-spliced programmatically from a captured `make eval` run rather than
+edited by hand, so the paste claim is true again and the banner is back at full strength. The
+stub disclosure now also appears in `AI judgment` as a block quote — added there, not taken from
+here.
+
+**Metric on both sides.** No metric moved: 76.2% auto-match, 0.00% false matches, before and
+after. What changed is that the block now says `offline_stub` where it previously said
+`gemini-3.7-flash (replay)`, which is the honest description of what served those six responses.
+
+---
+
 # The recurring failure: a test that passes while asserting the wrong thing
 
 Five separate instances now, which makes it the dominant failure mode of this project — more

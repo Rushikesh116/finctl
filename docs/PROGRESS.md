@@ -6,23 +6,27 @@ this file wins.
 
 > ## Next action
 >
-> **Phase 4 — fuzzy matching and global assignment.**
+> **The holdout evaluation — the last thing, and it runs once.**
 >
-> Layer 2 leaves **158 exceptions**, of which the tractable targets are: 46 merchant/gateway
-> rows needing candidate generation with amount tolerance and date windows, and pathology 7's
-> 4 records that must come out `AMBIGUOUS`. Build order: candidate generation → cost matrix →
-> `scipy.optimize.linear_sum_assignment` → the ambiguity margin.
+> Everything else is frozen: 76.2% auto-match, 0.00% false matches on `dev_seed_11`
+> (`data 1115450f`), five pages published, the ingestion adapter shipped and marked
+> UNVERIFIED against real data (Q-016). `make eval-holdout` prints whatever it prints and
+> **that is what ships**, better or worse. Nothing may be tuned in response to it.
 >
-> Two hard requirements: **never greedy** (D-0002 — greedy starves correct pairings and
-> inflates false matches), and the false-match rate must be reported before *and* after, on the
-> same data. `UNCLASSIFIED` ceiling drops to **9** and activates automatically when
-> `harness.PHASE` becomes 4.
+> Two things are outstanding and neither blocks the holdout:
+>
+> 1. **The live API is serving a stale build.** GitHub Pages is current at `03b8dce`; the
+>    Render service still reported `git_sha 867152e` and `404` on `/run`, `/exceptions`,
+>    `/settings` and `/about` for 30+ minutes after `7dfc214` was pushed. No Render credential
+>    exists in this environment to inspect or trigger the deploy.
+> 2. **Q-016** — the ingestion adapter has never seen a real recon report, because there is no
+>    gateway credential here. It must not be described as verified.
 >
 > `docs/SPEC.md` is **frozen**. Changing it needs a `DECISIONS.md` entry and approval.
 >
-> Outstanding questions, none blocking: **Q-004** (USD→INR rate; the harness prints `Rs TBD`
+> Older open questions, none blocking: **Q-004** (USD→INR rate; the harness prints `Rs TBD`
 > until one is pinned), **Q-002/Q-005/Q-006/Q-007/Q-010/Q-011/Q-014** (domain facts no fetched
-> document answers — carried as stated assumptions the README must name).
+> document answers — carried as stated assumptions the README names).
 
 ---
 
@@ -358,6 +362,44 @@ $ curl -s -o /dev/null -w '%{http_code}' https://rushikesh116.github.io/finctl/
 **Gate:**
 - [x] Deployed URL responds — both, `200`, evidence above
 - [x] `make demo` works from a clean clone with **no API key**
+
+---
+
+## Phase 6b — five pages, and a read-only ingestion adapter · **PASS** (2026-09-05)
+
+**Gate evidence.** `375 passed, 1 skipped`. Static export verified against the **published
+bytes** at <https://rushikesh116.github.io/finctl/>: all five pages return `200`, carry exactly
+one `<script>` (the inert JSON block), make no external request, and agree on every figure —
+`records=558 auto_matched=425 false_matches=0 dataset_sha=1115450f value_matched=6914602136`,
+identical across all five. `make demo` re-verified from a fresh clone of the **remote** into a
+temp directory with no `.env` and no key, reproducing 76.2% / 0.00% / Rs 6,91,46,021.36.
+
+- [x] Split into five pages — `/`, `/run`, `/exceptions`, `/settings`, `/about` — served by one
+      assembler parameterised by a link map (D-0026). No second renderer, so the live and
+      published pages cannot drift
+- [x] Static export writes real files with relative links, so GitHub Pages serves the same
+      navigation with no server
+- [x] Exception queue filterable by reason using CSS `:target` — no script, so the feature
+      survives in the export
+- [x] Every page states what it shows in one grey sentence under its heading
+- [x] `core/ingest/razorpay.py` — the Q-002 conversion in one audited function (D-0027)
+- [x] `/settings` reads **one** settlement, read-only, disabled under `DEMO_MODE=1`, and draws
+      no form in the static export where nothing could receive it
+- [x] Credentials never touch disk, the ledger, a page or an error message — asserted with a
+      key-shaped canary pushed through a real submission
+- [ ] **The live API still serves the previous build.** `docs/index.html` and GitHub Pages are
+      current; `https://finctl.onrender.com` reported `git_sha 867152e` and `404` on the four
+      new routes for 30+ minutes after `7dfc214` was pushed. No Render credential is available
+      in this environment to inspect or trigger the deploy. **Not worked around, not papered
+      over** — recorded here as outstanding
+
+**Not built, deliberately:** OAuth, webhooks, scheduled sync, key persistence. Each would turn a
+demonstration into an integration with a stored credential and a background process.
+
+**The adapter has never seen real data** (Q-016). There is no gateway credential in this
+environment, so it is verified against the documented schema and synthetic rows shaped to it —
+and marked UNVERIFIED rather than described as covered. No figure from it may enter an accuracy
+metric.
 
 ---
 
