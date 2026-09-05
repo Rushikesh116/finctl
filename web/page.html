@@ -4,67 +4,31 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>%%TITLE%%</title>
-<meta name="description" content="Payment reconciliation: what matched, what did not, and why.">
+<meta name="description" content="%%DESCRIPTION%%">
 <style>
 %%CSS%%
 </style>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <main>
   <header>
     <h1>%%H1%%</h1>
     <p class="tagline">%%TAGLINE%%</p>
+    <nav aria-label="Sections">%%NAV%%</nav>
     <p class="provenance">%%PROVENANCE%%</p>
     %%BANNER%%
   </header>
 
-  <section>
-    <h2>%%INTRO_H%%</h2>
-    <p class="says">%%INTRO_SAYS%%</p>
-    <div class="card intro">%%INTRO%%</div>
-  </section>
-
-  <section>
-    <h2>%%STRIP_H%%</h2>
-    <p class="says">%%STRIP_SAYS%%</p>
-    <dl class="strip">%%STRIP%%</dl>
-  </section>
-
-  <section>
-    <h2>%%CASCADE_H%%</h2>
-    <p class="says">%%CASCADE_SAYS%%</p>
-    <div class="card"><div class="cascade">%%CASCADE%%</div></div>
-    <p class="caption">%%CASCADE_CAPTION%%</p>
-  </section>
-
-  <section>
-    <h2>%%QUEUE_H%%</h2>
-    <p class="says">%%QUEUE_SAYS%%</p>
-    %%BY_TYPE%%
-    <div class="card flush"><div class="queue">%%QUEUE%%</div></div>
-    <p class="caption">%%QUEUE_CAPTION%%</p>
-  </section>
-
-  <section>
-    <h2>%%RAW_H%%</h2>
-    <p class="says">%%RAW_SAYS%%</p>
-    <div class="card">
-      <details class="raw">
-        <summary>%%BLOCK_SUMMARY%%</summary>
-        <pre>%%BLOCK%%</pre>
-      </details>
-      <details class="raw">
-        <summary>%%ABLATION_SUMMARY%%</summary>
-        <pre>%%ABLATION%%</pre>
-      </details>
-    </div>
-  </section>
+  <div id="main">
+%%MAIN%%
+  </div>
 
   <footer>%%FOOTER%%</footer>
 </main>
-<!-- Every number above is also here as JSON, so the page is machine-readable without scraping
+<!-- The figures on this page are also here as JSON, so it is machine-readable without scraping
      the markup. Nothing on this page executes: there is no script, no fetch, and no external
-     reference of any kind. -->
+     reference of any kind. Filtering is CSS `:target`, not code. -->
 <script id="run-data" type="application/json">%%DATA%%</script>
 </body>
 </html>

@@ -20,8 +20,9 @@ import os
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from core.config import load_dotenv
@@ -81,6 +82,15 @@ def compute_run(dataset: str = "dev_seed_11") -> dict[str, Any]:
         "auto_matched": metrics.auto_matched,
         "per_layer": {str(k): v for k, v in sorted(metrics.per_layer.items())},
         "false_matches": metrics.false_matches,
+        # The money-weighted view travels with the record view, because they are not the same
+        # number and a payments team reads the second. The three sum by construction and the
+        # harness raises if they ever do not.
+        "value": {
+            "total_paise": metrics.total_value_paise,
+            "matched_paise": metrics.value_matched_paise,
+            "exceptions_paise": metrics.value_exceptions_paise,
+            "by_source_paise": dict(sorted(metrics.value_by_source_paise.items())),
+        },
         "exceptions": metrics.exception_records,
         "correctly_flagged": metrics.correctly_flagged,
         "missed_matches": metrics.missed_matches,
@@ -265,29 +275,179 @@ def get_exceptions() -> JSONResponse:
     )
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
-    """The single page, assembled from the *live* run.
+def _demo_mode() -> bool:
+    return os.environ.get("DEMO_MODE", "0") == "1"
 
-    Same assembler as `make report`, so there is one UI and not a live copy drifting from a
-    static one. Rendering here rather than serving the committed `docs/index.html` also means the
-    page reports the provenance of the code actually running, instead of whatever SHA was current
-    when the file was last committed.
 
-    Falls back to the committed file if `web/` is missing from the image, because a page with
-    slightly stale provenance beats a 503.
+def _ingest_state(**extra: Any) -> dict[str, Any]:
+    """The settings page's state for this request.
+
+    `demo` wins over everything: `DEMO_MODE=1` is the deployed default and turns the page off
+    outright, so the public deployment cannot be handed a credential at all (D-0027).
+
+    **Nothing returned here may contain a secret.** The key id is echoed back so the form is not
+    retyped from scratch; the secret never leaves the request that carried it, and is never put
+    into this dict, into `run`, into the ledger, or into a log line (item 5).
     """
-    from scripts.render_report import build_html
+    if _demo_mode():
+        return {"mode": "demo"}
+    return {"mode": "ready", **extra}
 
+
+async def _form_fields(request: Request) -> dict[str, str]:
+    """Parse an `application/x-www-form-urlencoded` body with the standard library.
+
+    FastAPI's `Form(...)` needs `python-multipart`, which is not in the pinned stack, and widening
+    the stack for one form is not a trade worth making (D-0027). `urllib.parse.parse_qs` is
+    stdlib and this is the whole of what it has to do.
+
+    The body is read once and not retained. It is never logged.
+    """
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    return {key: values[0] for key, values in parse_qs(raw, keep_blank_values=True).items()}
+
+
+def _render(page: str, *, ingest: dict[str, Any] | None = None) -> HTMLResponse:
+    """Assemble one page from the *live* run.
+
+    Same assembler as `make report`, parameterised only by how a link is spelled (D-0026), so
+    there is one UI and not a live copy drifting from a static one. Rendering here rather than
+    serving the committed file also means the page reports the provenance of the code actually
+    running, instead of whatever SHA was current when the file was last committed.
+
+    Falls back to the committed static file if `web/` is missing from the image, because a page
+    with slightly stale provenance beats a 503.
+    """
+    from scripts.render_report import PAGES, SERVER_LINKS, build_page
+
+    run = _RUN.get("dev_seed_11") or compute_run("dev_seed_11")
     try:
-        return HTMLResponse(build_html(_RUN.get("dev_seed_11") or compute_run("dev_seed_11")))
+        return HTMLResponse(build_page(run, page=page, links=SERVER_LINKS, ingest=ingest))
     except FileNotFoundError:
-        static = REPO_ROOT / "docs" / "index.html"
+        static = REPO_ROOT / "docs" / PAGES[page][0]
         if static.exists():
             return HTMLResponse(static.read_text(encoding="utf-8"))
         raise HTTPException(
             status_code=503, detail="no page available; run `make report`"
         ) from None
+
+
+@app.get("/", response_class=HTMLResponse)
+def index() -> HTMLResponse:
+    """Overview: the problem, one worked payout, the headline figures."""
+    return _render("overview")
+
+
+@app.get("/run", response_class=HTMLResponse)
+def run_page() -> HTMLResponse:
+    """The cascade, the metrics block and the ablation table."""
+    return _render("run")
+
+
+@app.get("/exceptions", response_class=HTMLResponse)
+def exceptions_page() -> HTMLResponse:
+    """The exception queue, filterable by reason without a line of script."""
+    return _render("exceptions")
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page() -> HTMLResponse:
+    """The ingestion adapter: read one real test-mode settlement, read-only."""
+    return _render("settings", ingest=_ingest_state())
+
+
+@app.post("/settings", response_class=HTMLResponse)
+async def settings_submit(request: Request) -> HTMLResponse:
+    """Read **one** settlement's recon report and show the canonical records it produces.
+
+    Read-only in both directions: the adapter can only issue `GET` (D-0027), and this endpoint
+    writes nothing anywhere — not to disk, not to the audit ledger, not to the run. The
+    credential lives in this function's frame and in `os.environ` for the life of the process,
+    which is what "stored in the environment" means here; it is never persisted.
+
+    Refused outright under `DEMO_MODE=1`, before the body is even parsed, so the deployed
+    instance has no path that accepts a key.
+    """
+    if _demo_mode():
+        return _render("settings", ingest={"mode": "demo"})
+
+    from core.ingest.razorpay import (
+        ReconFetchError,
+        adapt_recon_report,
+        fetch_recon,
+        key_mode_warning,
+    )
+
+    fields = await _form_fields(request)
+    key_id = fields.get("key_id", "").strip()
+    key_secret = fields.get("key_secret", "").strip()
+    settlement_id = fields.get("settlement_id", "").strip()
+
+    # Echoed back so the form need not be retyped. The secret is not among them, deliberately.
+    echo = {"key_id": key_id, "settlement_id": settlement_id}
+
+    try:
+        year = int(fields.get("year", "").strip())
+        month = int(fields.get("month", "").strip())
+    except ValueError:
+        return _render(
+            "settings",
+            ingest=_ingest_state(error="Year and month must both be whole numbers.", **echo),
+        )
+
+    if not key_id or not key_secret or not settlement_id:
+        return _render(
+            "settings",
+            ingest=_ingest_state(
+                error="A key id, a key secret and a settlement id are all required.", **echo
+            ),
+        )
+
+    # "Stored in the environment": process-lifetime only. Never written to `.env`, never
+    # committed, never logged. The secret is set so a subsequent request in the same process can
+    # reuse it without the operator retyping it; nothing reads it except the adapter.
+    os.environ["RAZORPAY_KEY_ID"] = key_id
+    os.environ["RAZORPAY_KEY_SECRET"] = key_secret
+
+    try:
+        items = fetch_recon(
+            key_id=key_id, key_secret=key_secret, year=year, month=month
+        )
+    except ReconFetchError as error:
+        # `ReconFetchError` is constructed without the credential by design; this re-raise path
+        # carries only its message, never the exception chain that produced it.
+        return _render("settings", ingest=_ingest_state(error=str(error), **echo))
+
+    report = adapt_recon_report(items, settlement_id=settlement_id)
+    return _render(
+        "settings",
+        ingest=_ingest_state(
+            mode="result",
+            rows=[
+                {
+                    "row_id": row.row_id,
+                    "type": row.type,
+                    "credit_paise": row.credit_paise,
+                    "debit_paise": row.debit_paise,
+                    "fee_base_paise": row.fee_base_paise,
+                    "gst_paise": row.gst_paise,
+                    "net_paise": row.net_paise,
+                }
+                for row in report.rows
+            ],
+            skipped=report.skipped,
+            settlement_ids=report.settlement_ids,
+            net_total_paise=sum(row.net_paise for row in report.rows),
+            warning=key_mode_warning(key_id),
+            **echo,
+        ),
+    )
+
+
+@app.get("/about", response_class=HTMLResponse)
+def about_page() -> HTMLResponse:
+    """Architecture, the verifier boundary, what broke, and the limits."""
+    return _render("about")
 
 
 # No StaticFiles mount. Everything the page needs is inlined by the assembler, so mounting the

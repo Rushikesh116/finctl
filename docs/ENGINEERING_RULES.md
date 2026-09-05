@@ -83,7 +83,7 @@ Re-read them at the start of every session.
 | `make run` | Reconciles the dev dataset and writes the match ledger plus the hash-chained audit log to SQLite |
 | `make eval` | The harness on the **dev** dataset plus the ablation table. Prints the metrics block that gets pasted into `docs/METRICS.md` |
 | `make eval-holdout` | Phase 6 **only**, once: also evaluates the holdout. Deliberately not part of `make eval` — iterating against a holdout converts it into a training set |
-| `make report` | Renders the static run report to `docs/index.html`, data inlined — no server, no fetch, no build step |
+| `make report` | Renders the five static report pages into `docs/` — `index.html`, `run.html`, `exceptions.html`, `settings.html`, `about.html` — data inlined, relative links between them, no server, no fetch, no build step (D-0026) |
 | `make serve` | Runs the FastAPI app on `:8000`, serving both the JSON API and the UI from one process |
 | `make llm-curve` | LLM calls per run as the regex cache fills — two curves, isolating promotion from replay |
 | `make test` | Runs pytest |

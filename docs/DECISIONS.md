@@ -674,3 +674,117 @@ SDK surface, so it will work the moment a key exists — but fixtures still cann
 from real responses, the `offline_stub` tag stays because it is still true, and the question "do
 the model's proposed regexes pass the negative-example gate" remains **unanswered rather than
 answered**. *2026-08-26*
+
+---
+
+## D-0026 — the report becomes five pages, and the assembler is parameterised by link style
+
+**Context.** The single page worked as a *record* of a run and failed as an *explanation* of
+one. A first-time reader met the worked example, the cascade, the metrics block, the ablation
+table and 133 exceptions in one column, with no way to stop. Everything on it was true and
+almost none of it was reachable.
+
+**Decision.** Split into five pages — `/` overview, `/run` the cascade and the numbers,
+`/exceptions` the queue, `/settings` the ingestion adapter (D-0027), `/about` architecture and
+limits — served by **one assembler** that takes a *link map* as a parameter.
+
+```
+SERVER_LINKS = {"overview": "/",          "run": "/run",  ...}
+STATIC_LINKS = {"overview": "index.html", "run": "run.html", ...}
+```
+
+`api/main.py` passes the first, `make report` passes the second and writes real files. That is
+the whole mechanism. There is no router, no template inheritance, and no second renderer.
+
+**Alternatives rejected.**
+
+* **A second static-only renderer.** Two renderers means the live page and the published page
+  can disagree, which is precisely the drift the single-assembler rule exists to prevent. The
+  only thing that actually differs between the two is how a link is spelled, so a link map is
+  the whole of the difference and deserves to be the whole of the abstraction.
+* **Absolute paths in the static export.** `/run` resolves to the domain root on GitHub Pages,
+  which is not where the project is published. Relative filenames are what make the export work
+  from `file://`, from Pages, and from inside the container without a server.
+* **Query-string filtering on `/exceptions`** (`?type=AMBIGUOUS`). Requires a server, so the
+  static export would lose the feature. Filtering is done with CSS `:target` instead: the filter
+  links are fragment anchors and the rules are `#f-TYPE:target ~ .queue .item:not(.t-TYPE)
+  { display: none }`. **No script**, works from a file, and the browser's back button behaves.
+* **Client-side filtering in JavaScript.** Would break the property the static report exists to
+  demonstrate — that nothing on the page executes — for a feature CSS already delivers.
+
+**Consequence for a test that has to change.** `test_no_navigation_icons_or_dead_controls`
+asserted `"<nav" not in page`, justified as "one page, so no nav". That justification expired
+with this decision. The test is **rewritten rather than deleted**: it now asserts that
+navigation exists, that every link in it resolves to a page this export actually writes, and
+that the old prohibitions on `<button>`, `<svg>` and `<img>` still hold. A gate whose premise
+changes should be re-aimed, not removed — removing it would leave the page free to grow dead
+links, which is the thing the original test was really protecting against. *2026-09-05*
+
+---
+
+## D-0027 — a read-only ingestion adapter, and no integration beyond it
+
+**Deviates from a standing rule.** `ENGINEERING_RULES.md` → "Stop and ask before" lists *making
+any network call to a payment gateway, test mode or otherwise*. Building the capability was
+requested explicitly; this entry records the shape it was given and the limits it was given.
+
+**Context.** Every number this project reports is measured on synthetic data (README →
+Limitations). The most valuable thing a real gateway connection can do here is therefore *not*
+to raise the accuracy figures — it cannot, and pretending otherwise would be the exact failure
+this repository keeps catching in itself. It is to answer **Q-002**: whether the real settlement
+recon report's `fee` is inclusive of `tax`, which is the one open domain question that changes
+the arithmetic.
+
+**Decision. An adapter, not an integration.**
+
+`core/ingest/razorpay.py` maps a settlement recon report row to the canonical `GatewayRow`. It
+holds **the Q-002 conversion in exactly one audited function**, `fee_split`:
+
+```
+fee_base_paise = fee - tax        # fee is GST-INCLUSIVE
+gst_paise      = tax
+```
+
+One place, so the assumption has a single site to correct when a real report settles it, and a
+single site to test.
+
+**Read-only is structural, not promised.** `_get_json` is the only network function, it hard-codes
+the method, and it raises if handed anything but `GET`. There is no write path in the module to
+disable — the code to create, update or delete simply does not exist.
+`tests/test_secrets.py::test_the_adapter_has_no_write_path` asserts the module contains no other
+HTTP verb, and `::test_a_key_shaped_string_reaches_neither_the_ledger_nor_any_page` pushes a
+key-shaped canary through a real submission, then searches the audit ledger, the SQLite it writes,
+and all five rendered pages for it.
+
+**Verified against fetched documentation, not memory** (2026-09-05):
+
+| Fact | Source |
+|---|---|
+| `GET https://api.razorpay.com/v1/settlements/recon/combined` | `/docs/api/settlements/fetch-recon/` |
+| Basic auth, `Authorization: Basic base64(key_id:key_secret)` | `/docs/api/authentication/` |
+| Required `year`, `month`; optional `day`, `count`, `skip` | `/docs/api/settlements/fetch-recon/` |
+| Envelope `{"entity":"collection","count":N,"items":[…]}` | `/docs/api/settlements/fetch-recon/` |
+| Row field names (`entity_id`, `debit`, `credit`, `fee`, `tax`, …) | already verified, `skills/razorpay-domain` |
+
+**UNVERIFIED and marked as such** (Q-016): the documentation does **not** state that test-mode key
+ids carry a distinguishing prefix. So "test mode only" cannot be mechanically proven from the
+credential. The guard is therefore a *warning* on a key id that does not begin `rzp_test_`, not a
+claim — and the real guarantee is that no write path exists.
+
+**Alternatives rejected.**
+
+* **The `razorpay` Python SDK.** A new dependency for one `GET`, against a pinned stack that
+  requires approval to widen. `urllib.request` is stdlib and the whole client is under forty
+  lines.
+* **Persisting the key.** Not to disk, not to `.env`, not to the ledger. It lives in
+  `os.environ` for the life of the process and nowhere else (item 5).
+* **OAuth, webhooks, scheduled sync, key persistence.** Explicitly out of scope and not built.
+  Each would turn a demonstration into an integration with a stored credential and a background
+  process, which is a different project with a different threat model.
+* **Folding real rows into the reported metrics.** Refused. The accuracy figures are measured on
+  a dataset with ground-truth labels; a real settlement has none, so it can be *displayed* but it
+  can never enter a rate. The page says so.
+
+**Disabled in the deployed environment.** `DEMO_MODE=1` is the deployed default and it turns the
+page off entirely with a message, so the public deployment cannot be handed a credential at all.
+*2026-09-05*

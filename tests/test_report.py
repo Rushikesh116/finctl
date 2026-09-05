@@ -165,7 +165,7 @@ def test_every_template_token_is_substituted() -> None:
 
 def test_cascade_has_five_bars_and_widths_come_from_entering_counts() -> None:
     """Four layers plus the queue, sized by arrivals — not by what each layer resolved."""
-    page = build_html(_run())
+    page = build_html(page="run", run=_run())
     rungs = re.findall(r'<div class="rung[^"]*">.*?width:([\d.]+)%', page, re.S)
 
     assert len(rungs) == 5, f"expected five bars, found {len(rungs)}"
@@ -179,7 +179,7 @@ def test_cascade_widths_never_widen_down_the_funnel() -> None:
 
     A widening bar would mean the cascade is being drawn from something other than the funnel.
     """
-    page = build_html(_run())
+    page = build_html(page="run", run=_run())
     widths = [
         float(w) for w in re.findall(r'<div class="rung[^"]*">.*?width:([\d.]+)%', page, re.S)
     ]
@@ -188,7 +188,7 @@ def test_cascade_widths_never_widen_down_the_funnel() -> None:
 
 def test_a_layer_that_resolved_nothing_is_marked_not_hidden() -> None:
     """Layer 3 resolves zero on the real dataset. That is a result, and it must be visible."""
-    page = build_html(_run())
+    page = build_html(page="run", run=_run())
     assert 'class="rung dead"' in page
     assert "settled none of them" in page
 
@@ -219,7 +219,7 @@ def test_the_internal_type_is_still_shown_but_not_as_the_label() -> None:
     Both appear — the label leads, the type is secondary — so this asserts the ordering rather
     than the absence of the constant.
     """
-    page = build_html(_run(exception_items=[_item()], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[_item()], record_digest=_digest()))
     label = label_for("AMBIGUOUS", 3)
     assert page.index(label) < page.index("AMBIGUOUS<")
 
@@ -235,7 +235,7 @@ def test_truncated_evidence_says_so_with_both_counts() -> None:
         evidence_found=21,
         evidence_truncated=True,
     )
-    page = build_html(_run(exception_items=[item], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[item], record_digest=_digest()))
 
     assert "showing 5 of 21" in page
     assert "truncated" in page
@@ -250,7 +250,7 @@ def test_incomplete_evidence_is_reported_as_a_lower_bound() -> None:
         evidence_found=0,
         evidence_complete=False,
     )
-    page = build_html(_run(exception_items=[item], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[item], record_digest=_digest()))
 
     assert "lower bound" in page
     assert "stopping rule" in page
@@ -258,13 +258,13 @@ def test_incomplete_evidence_is_reported_as_a_lower_bound() -> None:
 
 def test_absent_evidence_and_exhausted_search_read_differently() -> None:
     """Conflating "nothing to weigh" with "gave up before finding anything" is the D-0014 error."""
-    nothing_to_weigh = build_html(
+    nothing_to_weigh = build_html(page="exceptions", run=
         _run(
             exception_items=[_item(evidence=[], evidence_found=0, evidence_complete=True)],
             record_digest=_digest(),
         )
     )
-    gave_up = build_html(
+    gave_up = build_html(page="exceptions", run=
         _run(
             exception_items=[_item(evidence=[], evidence_found=0, evidence_complete=False)],
             record_digest=_digest(),
@@ -277,7 +277,7 @@ def test_absent_evidence_and_exhausted_search_read_differently() -> None:
 
 def test_evidence_records_carry_amount_and_keys_not_just_ids() -> None:
     """A row id alone does not let a reader check that two candidates are indistinguishable."""
-    page = build_html(_run(exception_items=[_item()], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[_item()], record_digest=_digest()))
 
     assert "ml_1" in page and "gw_1" in page
     assert "Rs 25.00" in page, "evidence record is missing its amount"
@@ -287,7 +287,7 @@ def test_evidence_records_carry_amount_and_keys_not_just_ids() -> None:
 
 def test_timestamps_render_as_dates_not_epochs() -> None:
     """`1773133200` beside an amount tells an operator nothing."""
-    page = build_html(_run(exception_items=[_item()], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[_item()], record_digest=_digest()))
 
     assert "1773133200" not in page.split('<script id="run-data"')[0]
     assert "IST" in page
@@ -298,7 +298,7 @@ def test_every_exception_shows_the_records_it_names() -> None:
     item = _item(
         type="MISSING_BANK_ROW", layer=1, evidence=[], evidence_found=0, record_ids=["gw_1"]
     )
-    page = build_html(_run(exception_items=[item], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[item], record_digest=_digest()))
 
     assert "Records named" in page
     assert "gw_1" in page
@@ -308,7 +308,7 @@ def test_every_exception_shows_the_records_it_names() -> None:
 
 
 def test_money_is_formatted_with_indian_grouping_at_the_render_boundary() -> None:
-    page = build_html(_run(at_risk_paise=123456789))
+    page = build_html(page="exceptions", run=_run(at_risk_paise=123456789))
     # 123456789 paise = Rs 12,34,567.89 — lakh grouping, not thousands.
     assert "Rs 12,34,567.89" in page
     assert "Rs 1,234,567.89" not in page
@@ -331,7 +331,7 @@ def test_empty_queue_says_what_to_run_and_what_to_distrust() -> None:
     be edited and a test pinned to it would object to improvements while still permitting a bare
     "Nothing here."
     """
-    page = build_html(_run(exception_items=[], exceptions=0, by_type={}))
+    page = build_html(page="exceptions", run=_run(exception_items=[], exceptions=0, by_type={}))
     empty = re.search(r'<div class="empty">(.*?)</div>', page, re.S).group(1)
 
     assert re.search(r"<strong>[^<]+</strong>", empty), "no plain-language headline"
@@ -340,12 +340,12 @@ def test_empty_queue_says_what_to_run_and_what_to_distrust() -> None:
 
 
 def test_no_records_says_what_to_run() -> None:
-    page = build_html(_run(records=0, auto_matched=0, exceptions=0, exception_items=[]))
+    page = build_html(page="run", run=_run(records=0, auto_matched=0, exceptions=0, exception_items=[]))
     assert "make demo" in page
 
 
 def test_missing_audit_trail_says_what_to_run() -> None:
-    page = build_html(_run(exception_items=[_item(audit_trail=[])], record_digest=_digest()))
+    page = build_html(page="exceptions", run=_run(exception_items=[_item(audit_trail=[])], record_digest=_digest()))
     assert "make run" in page
 
 
@@ -460,15 +460,78 @@ def test_cards_are_hairline_bordered_on_a_near_white_ground() -> None:
     assert re.search(r"padding:\s*[\d.]+rem", card), "cards have no internal padding"
 
 
-def test_no_navigation_icons_or_dead_controls() -> None:
-    """One page, so no nav; and nothing may imply interaction that does not exist."""
-    page = build_html(_run(exception_items=[_item()], record_digest=_digest()))
+def test_navigation_is_honest() -> None:
+    """The report is five pages now (D-0026), so it has navigation. It must not lie.
 
-    assert "<nav" not in page and "<aside" not in page, "the page grew navigation"
-    assert "<button" not in page, "a button implies an action this page cannot perform"
-    assert "<svg" not in page and "<img" not in page, "an icon crept in"
-    # Only <summary> is interactive, and only because <details> makes it genuinely so.
-    assert page.count("cursor: pointer") <= 2
+    This test replaces `test_no_navigation_icons_or_dead_controls`, whose premise — "one page,
+    so no nav" — expired with that decision. The prohibition it was really enforcing is kept and
+    re-aimed: nothing on the page may imply an interaction that does not exist. A link to a file
+    the export does not write is exactly that, so every nav target is checked against the set of
+    pages actually rendered.
+    """
+    from scripts.render_report import PAGES, STATIC_LINKS
+
+    for key in PAGES:
+        page = build_html(
+            _run(exception_items=[_item()], record_digest=_digest()),
+            page=key,
+            links=STATIC_LINKS,
+        )
+
+        assert "<nav" in page, f"{key} has no navigation"
+        assert "<svg" not in page and "<img" not in page, "an icon crept in"
+        # No control anywhere may imply an action the page cannot perform. In the *static*
+        # export that means no controls at all beyond `<details>`: there is no server, so a
+        # form would post into the void. The live `/settings` page does have a real form, and
+        # `test_the_settings_form_appears_only_where_it_can_act` is where that is checked.
+        assert "<button" not in page, "a button implies an action this page cannot perform"
+        assert "<form" not in page, f"{key} in the static export has a form with no server"
+
+        nav = re.search(r"<nav[^>]*>(.*?)</nav>", page, re.S).group(1)
+        targets = re.findall(r'href="([^"#]+)', nav)
+        written = {PAGES[k][0] for k in PAGES}
+        for target in targets:
+            assert target in written, f"{key} links to {target}, which is never written"
+
+        # The current page is marked and is not a link to itself: a control that does nothing.
+        assert 'aria-current="page"' in nav, f"{key} does not mark itself as current"
+        assert PAGES[key][0] not in targets, f"{key} links to itself"
+
+
+def test_every_page_states_what_it_shows() -> None:
+    """The reference pattern: a heading, then one grey sentence saying what is under it."""
+    from scripts.render_report import PAGES
+
+    for key in PAGES:
+        page = build_html(
+            _run(exception_items=[_item()], record_digest=_digest()), page=key
+        )
+        headings = re.findall(r"<h2>.*?</h2>\s*(.{0,40})", page, re.S)
+        assert headings, f"{key} has no sections"
+        for following in headings:
+            assert 'class="says"' in following, f"a heading on {key} has no sentence beneath it"
+
+
+def test_filtering_needs_no_script_and_covers_the_closed_enum() -> None:
+    """Filtering is CSS `:target` (D-0026), so it survives in the static export.
+
+    The exception types are a closed enum, so the rules are enumerable — and every member needs
+    one. A type with a chip but no rule would be a filter that hides the whole queue, which is
+    worse than no filter at all.
+    """
+    from core.results import EXCEPTION_TYPES
+
+    css = (REPO_ROOT / "web" / "app.css").read_text(encoding="utf-8")
+    for kind in EXCEPTION_TYPES:
+        assert f"#f-{kind}:target" in css, f"{kind} has no filter rule, so filtering hides it"
+
+    page = build_html(
+        _run(exception_items=[_item()], record_digest=_digest()), page="exceptions"
+    )
+    assert 'id="f-all"' in page, "no way back to the unfiltered queue"
+    assert 'class="item t-AMBIGUOUS"' in page, "queue rows do not carry their type as a class"
+    # The filter is markup and stylesheet only.
+    assert len(re.findall(r"<script", page)) == 1
 
 
 # --- quoted material ----------------------------------------------------------------------
@@ -552,20 +615,62 @@ def test_renders_the_real_run(tmp_path: Path) -> None:
     if not dataset_files("dev_seed_11", generated_dir=GENERATED_DIR):
         pytest.skip("datasets not generated; run `make seed`")
 
-    out = tmp_path / "index.html"
-    assert render_report.main(["--out", str(out)]) == 0
+    from scripts.render_report import PAGES
 
-    page = out.read_text(encoding="utf-8")
-    assert len(re.findall(r'<div class="rung', page)) == 5
-    assert not re.search(r"\bsrc\s*=", page)
-    assert len(re.findall(r"<script", page)) == 1
+    assert render_report.main(["--out-dir", str(tmp_path)]) == 0
+
+    pages = {}
+    for key, (filename, *_rest) in PAGES.items():
+        path = tmp_path / filename
+        assert path.exists(), f"{filename} was not written"
+        pages[key] = path.read_text(encoding="utf-8")
+
+    for key, page in pages.items():
+        assert not re.search(r"\bsrc\s*=", page), f"{key} fetches an external asset"
+        assert len(re.findall(r"<script", page)) == 1, f"{key} has more than the data block"
+
+    assert len(re.findall(r'<div class="rung', pages["run"])) == 5
 
     data = json.loads(
         re.search(
-            r'<script id="run-data" type="application/json">(.*?)</script>', page, re.S
+            r'<script id="run-data" type="application/json">(.*?)</script>',
+            pages["exceptions"],
+            re.S,
         ).group(1).replace("<\\/", "</")
     )
     # Every exception in the payload is rendered — a page showing a subset of the queue while
     # claiming to be the queue is the failure this guards.
     for item in data["exception_items"]:
-        assert f'id="{item["id"]}"' in page
+        assert f'id="{item["id"]}"' in pages["exceptions"]
+
+
+def test_every_page_of_the_export_agrees_on_the_figures(tmp_path: Path) -> None:
+    """Five files, one set of numbers. They cannot disagree, and this proves it.
+
+    Each page inlines the whole run rather than the slice it renders (D-0026), so agreement is
+    structural. This asserts the property directly anyway, because "structural" is a claim about
+    code that can stop being true in one edit.
+    """
+    from eval.provenance import GENERATED_DIR, dataset_files
+    from scripts.render_report import PAGES
+
+    if not dataset_files("dev_seed_11", generated_dir=GENERATED_DIR):
+        pytest.skip("datasets not generated; run `make seed`")
+
+    assert render_report.main(["--out-dir", str(tmp_path)]) == 0
+
+    watched = ("records", "auto_matched", "false_matches")
+    seen: list[tuple] = []
+    for filename, *_rest in PAGES.values():
+        page = (tmp_path / filename).read_text(encoding="utf-8")
+        data = json.loads(
+            re.search(
+                r'<script id="run-data" type="application/json">(.*?)</script>', page, re.S
+            ).group(1).replace("<\\/", "</")
+        )
+        seen.append(
+            tuple(data[key] for key in watched)
+            + (data["provenance"]["dataset_sha"], data["value"]["matched_paise"])
+        )
+
+    assert len(set(seen)) == 1, f"pages disagree about the run: {set(seen)}"

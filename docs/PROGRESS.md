@@ -319,30 +319,55 @@ Layer 4 sees only what survived Layers 1–3 — target **under 5%** of the batc
 
 ---
 
-## Phase 6 — UI, report, deploy · TODO
+## Phase 6 — UI, report, deploy · **all but the holdout** (2026-09-05)
 
-- [ ] One page, no framework, no build step: run header, the five-bar **cascade**, metrics
-      strip, expandable exception table
-- [ ] Monospace tabular numerals; money right-aligned, two decimals, formatted from integer
-      paise at the last moment
-- [ ] Grayscale plus at most two accents; sentence case; labels name what the user sees
-      ("Could not match", not `LAYER_4_REJECT`)
-- [ ] Visible keyboard focus, `prefers-reduced-motion` respected, readable at phone width
-- [ ] `make report` renders a **static** `docs/index.html` with data inlined — no fetch
-- [ ] `Dockerfile` (non-root, `/healthz`), `docker-compose.yml`, `render.yaml`
-- [ ] `DEMO_MODE=1` in the deployed environment
-- [ ] **Run the holdout evaluation, once, and report whatever it says**
+**The one outstanding item is the holdout evaluation, which runs last, after everything else
+is frozen.** Every other box below is ticked against a check that was actually run, not
+against memory. The phase header stays open until the holdout row in `docs/METRICS.md` is
+filled.
+
+Deployment verified 2026-09-05 by fetching both URLs:
+
+```
+$ curl -s https://finctl.onrender.com/healthz
+{"status":"ok","demo_mode":true,"dataset":"dev_seed_11","dataset_sha":"1115450f",
+ "git_sha":"867152e","records":558,"auto_matched":425,"false_matches":0}
+$ curl -s -o /dev/null -w '%{http_code}' https://rushikesh116.github.io/finctl/
+200
+```
+
+- [x] No framework, no build step: run header, the **cascade**, metrics strip, expandable
+      exception table. Split into five pages in Phase 6b (D-0026) because one page could not
+      be read by someone meeting the problem for the first time
+- [x] Monospace tabular numerals; money right-aligned, two decimals, formatted from integer
+      paise at the last moment — `font-variant-numeric: tabular-nums` in `web/app.css`,
+      `format_rupees` called only in `scripts/render_report.py`
+- [x] Grayscale plus at most two accents; sentence case; labels name what the user sees
+      ("Could not match", not `LAYER_4_REJECT`) — `_LABELS` in the renderer
+- [x] Visible keyboard focus, `prefers-reduced-motion` respected, readable at phone width —
+      `:focus-visible`, `@media (prefers-reduced-motion: reduce)`, `@media (max-width: 46rem)`
+- [x] `make report` renders **static** HTML with data inlined — no fetch, no script beyond
+      the inert JSON block, asserted by `tests/test_report.py`
+- [x] `Dockerfile` (non-root `USER finctl`, `HEALTHCHECK` on `/healthz`),
+      `docker-compose.yml`, `render.yaml`
+- [x] `DEMO_MODE=1` in the deployed environment — `render.yaml`, and `/healthz` reports
+      `demo_mode: true` live
+- [ ] **Run the holdout evaluation, once, and report whatever it says** — outstanding, and
+      deliberately last
 
 **Gate:**
-- [ ] Deployed URL responds
-- [ ] `make demo` works from a clean clone with **no API key**
+- [x] Deployed URL responds — both, `200`, evidence above
+- [x] `make demo` works from a clean clone with **no API key**
 
 ---
 
-## Phase 7 — submission materials · TODO
+## Phase 7 — submission materials · **PASS** (2026-09-05)
 
-- [ ] `README.md`: problem, architecture, one-command run, results table, honest limitations,
+- [x] `README.md`: problem, architecture, one-command run, results table, honest limitations,
       both URLs at the very top
-- [ ] The "what broke" writeup, from `WHAT_BROKE.md` entries written as they happened
-- [ ] Final metrics, pasted
-- [ ] An explicit list of what is **not** solved
+- [x] The "what broke" writeup, from `WHAT_BROKE.md` entries written as they happened — the
+      five proxy-metric instances are grouped, because the pattern is the finding
+- [x] Final metrics, pasted from `make eval` with the command, git SHA and dataset SHA above
+      them in `docs/METRICS.md`
+- [x] An explicit list of what is **not** solved — README "Limitations", and the
+      "Out of scope — logged, not built" section of `docs/OPEN_QUESTIONS.md`

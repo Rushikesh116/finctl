@@ -18,7 +18,7 @@ help:
 	@echo "  seed    Generate $(DEV_DATASET) and $(HOLDOUT_DATASET) into data/generated/"
 	@echo "  run     Reconcile $(DEV_DATASET), write decisions + matches to SQLite"
 	@echo "  eval    Full harness: dev + holdout + ablation; prints the metrics block"
-	@echo "  report  Render the static run report to docs/index.html (no server, no fetch)"
+	@echo "  report  Render the five static report pages into docs/ (no server, no fetch)"
 	@echo "  serve   Run the FastAPI app -- API and UI from one process -- on :8000"
 	@echo "  test    Run pytest"
 	@echo "  demo    seed + run + eval + report from clean; needs no API key"
@@ -69,7 +69,7 @@ llm-curve:
 	$(PY) -m scripts.llm_curve --runs 4
 
 report:
-	$(PY) -m scripts.render_report --out docs/index.html
+	$(PY) -m scripts.render_report --out-dir docs
 
 serve:
 	$(VENV)/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000

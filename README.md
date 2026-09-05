@@ -103,10 +103,11 @@ Measured on `dev_seed_11`, 558 records. Pasted from `make eval` — no number in
 typed by hand.
 
 ```
-Dataset: dev_seed_11  data 1115450f   SHA: f7154cf   2026-09-01 15:08
-Adjudicator: gemini-3.7-flash (replay)   -- fixtures are MIXED real/stub, see 'AI judgment' below
-Records processed         558          Wall clock    0.284s
-Auto-matched              425    76.2%   Throughput   1961 rec/s
+Dataset: dev_seed_11  data 1115450f   SHA: 867152e   2026-09-05 16:23
+Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
+  ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.
+Records processed         558          Wall clock    0.295s
+Auto-matched              425    76.2%   Throughput   1893 rec/s
   Layer 1  exact            325    58.2%
   Layer 2  netting           73    13.1%
   Layer 3  fuzzy              0     0.0%
@@ -259,6 +260,25 @@ the same seed and inputs produce a byte-identical log and a run is replayable.
 ---
 
 ## AI judgment
+
+> **The fixture set is MIXED real and stub, and every run says so on the same line as its
+> numbers.** The metrics block above carries the harness's own banner verbatim —
+> `!! STUBBED PROPOSER, not a model (6 responses)` — and it is reproduced here rather than
+> summarised, because a caveat that shrinks on its way to the section that discusses it is not
+> a caveat.
+>
+> Two narration shapes were served **live** by `gemini-3.7-flash` in Phase 5, before the
+> free-tier allowance of 20 requests per day was exhausted. The rest of `fixtures/llm/` was
+> produced by `OfflineProposer`, which is a heuristic test double and **not a model**.
+>
+> The banner counts *this run's responses*, so it reads `STUBBED` even though a real model's
+> work is still doing the extracting: once a proposal is promoted, the narration resolves
+> through the cached regex and the fixture that produced it is never read again. The model
+> correctly disappears from the response counts while its rule keeps working — its
+> contribution moved from the response cache into the rules cache, which is what promotion is
+> for. The harness prints that explanation adjacent to the banner rather than in a footnote.
+>
+> **Do not read any LLM figure in this repository as fully model-derived.**
 
 **Calls per 100 records: 0.00 on replay**, all 6 responses from cache. The cold rate prints
 `not measured` rather than an estimate, because the cold run was terminated by quota exhaustion.
@@ -471,13 +491,12 @@ disclosed.
 needs one live call, and the free-tier allowance of 20 requests per day was exhausted before it was
 reached. It is handled by the offline stub.
 
-**The fixtures are mixed real and stub, and every run says so.** Two narration shapes were served
-live by `gemini-3.7-flash`; the rest of the fixture set is stub-generated. Runs are tagged
-`STUBBED PROPOSER` with the count, and the banner carries an adjacent note explaining that one
-cached rule was authored by a real model and therefore no longer appears in the response counts —
-its contribution moved from the response cache into the rules cache, which is what promotion is
-for. The provider was swapped from Anthropic to Google mid-project for **API access, not
-capability**; the verifier boundary is what made that a one-class change.
+**The fixtures are mixed real and stub, and every run says so.** Stated in full under
+[AI judgment](#ai-judgment), where the banner is reproduced verbatim rather than summarised.
+In short: two narration shapes were served live by `gemini-3.7-flash`, the rest of the fixture
+set is stub-generated, and no LLM figure here should be read as fully model-derived. The
+provider was swapped from Anthropic to Google mid-project for **API access, not capability**;
+the verifier boundary is what made that a one-class change.
 
 **Not measured at all:** behaviour on real gateway data, on volumes beyond 558 records, on
 multi-day settlement cycles that straddle a month boundary, or under concurrent writes. Throughput
@@ -500,7 +519,7 @@ docs/       SPEC (frozen), DECISIONS, WHAT_BROKE, METRICS, OPEN_QUESTIONS, PROGR
 
 `core/` imports neither `data/` nor `eval/`. That one-way arrow is what makes "the matcher never
 reads ground truth" mechanically checkable rather than a promise: `tests/test_invariants.py` parses
-the import graph and fails on violation. 317 tests, 1 skipped.
+the import graph and fails on violation. 332 passed, 1 skipped.
 
 See `docs/SPEC.md` for the frozen specification and its amendment log, `docs/DECISIONS.md` for the
 25 recorded decisions with the alternatives rejected, and `docs/METRICS.md` for every metrics block

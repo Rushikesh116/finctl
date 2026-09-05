@@ -450,6 +450,129 @@ footer {
   max-width: 46rem;
 }
 
+/* --- navigation ---------------------------------------------------------------------------- */
+
+/* Text links, no icons, no chrome. The current page is a span rather than a link to itself: a
+   control that does nothing is worse than no control (D-0026). */
+nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem 1.5rem;
+  margin: 1.25rem 0 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--hair);
+  font-size: .875rem;
+}
+
+nav a, nav .here {
+  text-decoration: none;
+  padding: .15rem 0;
+  border-bottom: 1px solid transparent;
+}
+
+nav a { color: var(--muted); }
+nav a:hover { color: var(--ink); border-bottom-color: var(--hair); }
+
+nav .here {
+  color: var(--ink);
+  font-weight: 500;
+  border-bottom-color: var(--ink);
+}
+
+/* Skip link: present for keyboard users, out of the way for everyone else. */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--card);
+  color: var(--ink);
+  padding: .6rem 1rem;
+  border: 1px solid var(--hair);
+  border-radius: var(--radius);
+  z-index: 10;
+}
+.skip:focus { left: 1rem; top: 1rem; }
+
+.onward {
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--hair);
+  color: var(--ink-2);
+  font-size: .9rem;
+  line-height: 1.7;
+  max-width: 46rem;
+}
+.onward a { color: var(--ink); }
+
+.onward-list { margin: 0; display: grid; gap: .35rem .75rem; }
+.onward-list dt { margin-top: .85rem; font-weight: 500; }
+.onward-list dt:first-child { margin-top: 0; }
+.onward-list dd {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: .9rem;
+  line-height: 1.65;
+}
+
+/* --- exception filtering, in CSS ------------------------------------------------------------ */
+
+/* Filtering with no script at all (D-0026). Each chip is a fragment link to an empty anchor that
+   sits immediately before the queue; `:target` on that anchor lets a sibling combinator reach in
+   and hide every row of a different type. The back button works because these are real history
+   entries, and it degrades to "everything shown" when no fragment is set. */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin: 0 0 1.25rem;
+}
+
+.filters .chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .35rem .7rem;
+  border: 1px solid var(--hair);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-2);
+  font-size: .8rem;
+  text-decoration: none;
+}
+
+.filters .chip:hover { color: var(--ink); border-color: var(--ink-2); }
+
+.filters .chip .cnt {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: .75rem;
+}
+
+/* The anchors themselves are invisible and carry nothing. */
+.ftarget { display: block; height: 0; overflow: hidden; }
+
+/* Targeting any filter anchor hides every row; the matching rule then re-shows its own
+   type. The exception types are a CLOSED enum (core/results.py), so these rules are
+   enumerable rather than open-ended, and a test asserts every member of that enum has one
+   here — otherwise adding a type would silently produce a filter that hides everything. */
+.ftarget:target ~ .card .item { display: none; }
+#f-all:target ~ .card .item { display: block; }
+#f-AMBIGUOUS:target ~ .card .t-AMBIGUOUS { display: block; }
+#f-DISPUTE_UNRESOLVED:target ~ .card .t-DISPUTE_UNRESOLVED { display: block; }
+#f-DUPLICATE_REFERENCE:target ~ .card .t-DUPLICATE_REFERENCE { display: block; }
+#f-FX_UNRESOLVED:target ~ .card .t-FX_UNRESOLVED { display: block; }
+#f-MISSING_BANK_ROW:target ~ .card .t-MISSING_BANK_ROW { display: block; }
+#f-MISSING_GATEWAY_ROW:target ~ .card .t-MISSING_GATEWAY_ROW { display: block; }
+#f-ON_HOLD_UNRELEASED:target ~ .card .t-ON_HOLD_UNRELEASED { display: block; }
+#f-SUBSET_SEARCH_EXHAUSTED:target ~ .card .t-SUBSET_SEARCH_EXHAUSTED { display: block; }
+#f-TIMING_OUTSIDE_WINDOW:target ~ .card .t-TIMING_OUTSIDE_WINDOW { display: block; }
+#f-UNCLASSIFIED:target ~ .card .t-UNCLASSIFIED { display: block; }
+#f-UNEXPLAINED_ADJ:target ~ .card .t-UNEXPLAINED_ADJ { display: block; }
+#f-UNPARSEABLE_NARRATION:target ~ .card .t-UNPARSEABLE_NARRATION { display: block; }
+#f-VERIFIER_REJECTED:target ~ .card .t-VERIFIER_REJECTED { display: block; }
+
 /* --- focus, motion, small screens -------------------------------------------------------- */
 
 /* Visible focus on everything interactive, including summary elements, which several UA
@@ -514,3 +637,62 @@ summary:focus:not(:focus-visible) { outline: none; }
 
   .cell dd { font-size: 1.25rem; }
 }
+
+/* The filter counts are rows, not records, and the two genuinely differ. Said next to the
+   controls rather than in a footnote, because that is where the confusion happens. */
+.filter-note { margin-top: -.5rem; margin-bottom: 1.25rem; }
+
+/* --- the credential form (D-0027) ---------------------------------------------------------- */
+
+/* The only form in the report, and the only page with a control that acts. It exists on the
+   server-rendered /settings page and is deliberately absent from the static export, where there
+   would be nothing to receive it. */
+
+form.keys { margin: 0; max-width: 34rem; }
+form.keys p { margin: 0 0 1rem; display: flex; flex-direction: column; gap: .35rem; }
+form.keys p.two { flex-direction: row; gap: .75rem; align-items: flex-end; flex-wrap: wrap; }
+form.keys p.two label { align-self: flex-start; }
+
+form.keys label {
+  color: var(--ink-2);
+  font-size: .8rem;
+  letter-spacing: .01em;
+}
+
+form.keys input {
+  font: inherit;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  padding: .5rem .65rem;
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  background: var(--ground);
+  color: var(--ink);
+  min-width: 0;
+}
+
+form.keys p.two input { width: 7rem; }
+form.keys input:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+
+form.keys input.submit {
+  font-family: var(--sans);
+  cursor: pointer;
+  align-self: flex-start;
+  width: auto;
+  padding: .55rem 1.1rem;
+  background: var(--ink);
+  color: var(--card);
+  border-color: var(--ink);
+}
+form.keys input.submit:hover { opacity: .88; }
+
+/* The limits list. Plain text, no icons -- these are the constraints, not decoration. */
+.limits {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--ink-2);
+  font-size: .9rem;
+  line-height: 1.7;
+}
+.limits li { margin-bottom: .5rem; }
+.limits li:last-child { margin-bottom: 0; }

@@ -65,6 +65,10 @@ the generator is at risk from the ambiguity.
 **Resolves when:** a real settlement statement or recon report is inspected, or Razorpay
 support confirms. Until then the README says so plainly. Related: `razorpay-domain` → U-2.
 
+**Update 2026-09-05.** The adapter that depends on this now exists — `core/ingest/razorpay.py`,
+D-0027 — and resolves the ambiguity in one audited place on the GST-inclusive reading. It has
+still never seen a real report, so this question is **not** closed by its existence. See Q-016.
+
 ---
 
 ## Q-003 — `temperature=0` is not available on the default model
@@ -252,6 +256,53 @@ every narration in the bank statement that ground truth says carries no referenc
 breadth check that rejects a pattern matching more than a small fraction of all narrations in
 the run. Not built: Phase 5's scope was fixed at three items and this is a fourth. Logged here
 per that instruction.
+
+---
+
+## Q-016 — the ingestion adapter is UNVERIFIED against a real recon report
+
+**Status: OPEN. The adapter is written, tested and shipped; it has never seen real data.**
+
+`core/ingest/razorpay.py` (D-0027) maps a settlement recon report onto the canonical schema and
+resolves Q-002 in one audited function, `fee_split`, on the **GST-inclusive** reading:
+
+```
+fee_base = fee - tax
+gst      = tax
+```
+
+**No real report has been fetched, and none can be from here.** There is no Razorpay credential
+in this environment — no `RAZORPAY_KEY_ID`, no key in `.env`, nothing in the process environment
+— and `ENGINEERING_RULES.md` → "Stop and ask before" requires approval before any gateway network
+call in any case. So the adapter is verified against the **documented schema** and against
+synthetic rows shaped to it, and **not** against a byte of production data.
+
+Concretely, what is and is not established:
+
+* **Established** — the endpoint, auth scheme and parameter names are quoted from documentation
+  fetched 2026-09-05, not recalled (D-0027 lists each with its page). The mapping is exercised by
+  19 tests. The request FinCtl would build is asserted against a fake opener, so the `GET`, the
+  URL and the `Authorization` header are checked without one leaving the machine.
+* **Established** — the adapter cannot write. `_get_json` hard-codes the method and a test
+  asserts no other HTTP verb appears anywhere in the module.
+* **NOT established** — that a real recon row's `fee` is GST-inclusive. This is Q-002, and it is
+  the one thing a real report would settle. `fee_split` raises rather than clamping when
+  `tax > fee`, so the wrong reading surfaces as an error naming this question rather than as a
+  quietly negative fee base.
+* **NOT established** — that a real report's rows carry the fields the documentation lists, in
+  the types it lists.
+
+**Sub-question, also unverified: test-mode key ids have no documented prefix.**
+`https://razorpay.com/docs/payments/dashboard/account-settings/api-keys/` was fetched on
+2026-09-05 and does not state that a test key id begins `rzp_test_`. FinCtl therefore *warns* on
+a key id without that prefix and does not refuse, because refusing would enforce a convention the
+gateway never published. The guarantee that actually holds is the absence of a write path.
+
+**Resolves when:** a test-mode key pair is supplied to `/settings`, one settlement is read, and
+the resulting canonical records are inspected against the dashboard's own break-up for the same
+settlement. Until then the adapter must not be described as verified, and **no figure derived
+from it may enter any accuracy metric** — those are measured on labelled synthetic data, and a
+real settlement has no ground truth to be measured against.
 
 ---
 
