@@ -103,11 +103,11 @@ Measured on `dev_seed_11`, 558 records. Pasted from `make eval` — no number in
 typed by hand.
 
 ```
-Dataset: dev_seed_11  data 1115450f   SHA: 867152e   2026-09-05 16:23
+Dataset: dev_seed_11  data 1115450f   SHA: 03b8dce   2026-09-05 16:53
 Adjudicator: offline_stub / gemini-3.7-flash   !! STUBBED PROPOSER, not a model (6 responses)
   ^ counts THIS RUN's responses. 1 cached rule(s) were authored by a real model; those narrations now resolve via the promoted regex, so their fixtures are never consulted and the model does not appear above. Its contribution moved from the response cache into the rules cache, which is what promotion is for.
-Records processed         558          Wall clock    0.295s
-Auto-matched              425    76.2%   Throughput   1893 rec/s
+Records processed         558          Wall clock    0.392s
+Auto-matched              425    76.2%   Throughput   1422 rec/s
   Layer 1  exact            325    58.2%
   Layer 2  netting           73    13.1%
   Layer 3  fuzzy              0     0.0%
